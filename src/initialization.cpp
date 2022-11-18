@@ -12,8 +12,8 @@ void lioOptimization::motionInitialization()
         v_lidar_pose.push_back(Eigen::MatrixXd::Identity(4, 4));
 
         Eigen::Matrix4d initial_pose = Eigen::MatrixXd::Identity(4, 4);
-        initial_pose.block<3, 3>(0, 0) = all_cloud_frame[0]->p_state->rotation.toRotationMatrix();
-        initial_pose.block<3, 1>(0, 3) = all_cloud_frame[0]->p_state->translation;
+        initial_pose.block<3, 3>(0, 0) = all_cloud_frame[0]->p_state->rotation_end.toRotationMatrix();
+        initial_pose.block<3, 1>(0, 3) = all_cloud_frame[0]->p_state->translation_end;
 
         for (int i = 1; i < all_cloud_frame.size(); i++)
         {
@@ -22,8 +22,8 @@ void lioOptimization::motionInitialization()
             g_sum += g_temp;
 
             Eigen::Matrix4d current_pose = Eigen::MatrixXd::Identity(4, 4);
-            current_pose.block<3, 3>(0, 0) = all_cloud_frame[i]->p_state->rotation.toRotationMatrix();
-            current_pose.block<3, 1>(0, 3) = all_cloud_frame[i]->p_state->translation;
+            current_pose.block<3, 3>(0, 0) = all_cloud_frame[i]->p_state->rotation_end.toRotationMatrix();
+            current_pose.block<3, 1>(0, 3) = all_cloud_frame[i]->p_state->translation_end;
 
             Eigen::Matrix4d pose_temp = initial_pose.inverse() * current_pose;
             current_pose.block<3, 3>(0, 0) = pose_temp.block<3, 3>(0, 0) * R_imu_lidar;
@@ -68,7 +68,7 @@ void lioOptimization::staticInitialization(cloudFrame *p_frame)
 
     if(p_frame->time_sweep_end - time_init > 3.0)
     {
-        Eigen::Vector3d avg_velocity = p_frame->p_state->translation / (p_frame->time_sweep_end - time_init);
+        Eigen::Vector3d avg_velocity = p_frame->p_state->translation_end / (p_frame->time_sweep_end - time_init);
 
         if(G.norm() < 0.1)
         {
@@ -179,9 +179,9 @@ bool lioOptimization::initialLidarStructure(std::vector<Eigen::Matrix4d, Eigen::
     }
 
     for (int i = 0; i < all_cloud_frame.size(); i++)
-        all_cloud_frame[i]->p_state->velocity = all_cloud_frame[i]->p_state->rotation * x.segment<3>(3 * i);
+        all_cloud_frame[i]->p_state->velocity = all_cloud_frame[i]->p_state->rotation_end * x.segment<3>(3 * i);
 
-    g = all_cloud_frame[0]->p_state->rotation.toRotationMatrix() * R_imu_lidar * g;
+    g = all_cloud_frame[0]->p_state->rotation_end.toRotationMatrix() * R_imu_lidar * g;
 
     G = g;
 

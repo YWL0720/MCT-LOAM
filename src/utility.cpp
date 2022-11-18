@@ -204,6 +204,7 @@ void distortFrame(std::vector<point3D> &points, Eigen::Quaterniond &q_begin, Eig
     }
 }
 
+// 修改 使用当前帧中间时刻和结束时刻的两个位姿进行整帧时间位姿的表示
 void transformPoint(MotionCompensation compensation, point3D &point_temp, Eigen::Quaterniond &q_begin, Eigen::Quaterniond &q_end, 
     Eigen::Vector3d &t_begin, Eigen::Vector3d &t_end, Eigen::Matrix3d &R_imu_lidar, Eigen::Vector3d &t_imu_lidar)
 {
@@ -223,7 +224,30 @@ void transformPoint(MotionCompensation compensation, point3D &point_temp, Eigen:
             t = (1.0 - alpha_time) * t_begin + alpha_time * t_end;
             break;
     }
+
+
+
     // 如果是恒定速度表示法 则将点根据当前帧结束时刻的位姿转换到世界坐标系下
     // 如果是连续时间表示法 则根据每个点时刻的位姿 将点转换到世界坐标系下
     point_temp.point = R * (R_imu_lidar * point_temp.raw_point + t_imu_lidar) + t;
+}
+
+void transformPoint(MotionCompensation compensation, point3D &point_temp, Eigen::Quaterniond &q_last_end, Eigen::Quaterniond &q_middle, Eigen::Quaterniond &q_end,
+                    Eigen::Vector3d &t_last_end, Eigen::Vector3d &t_middle, Eigen::Vector3d &t_end, Eigen::Matrix3d &R_imu_lidar, Eigen::Vector3d &t_imu_lidar)
+{
+    Eigen::Vector3d t;
+    Eigen::Matrix3d R;
+    double alpha_time = point_temp.alpha_time;
+    if (alpha_time <= 0.5)
+    {
+        R = q_last_end.slerp(alpha_time * 2, q_middle).normalized().toRotationMatrix();
+        t = t_last_end + alpha_time * 2 * (t_middle - t_last_end);
+    }
+    else
+    {
+        R = q_middle.slerp(alpha_time * 2 - 1, q_end).normalized().toRotationMatrix();
+        t = t_middle + (alpha_time * 2 - 1) * (t_end - t_middle);
+    }
+    point_temp.point = R * (R_imu_lidar * point_temp.raw_point + t_imu_lidar) + t;
+
 }

@@ -2,11 +2,11 @@
 
 state::state(const Eigen::Quaterniond &rotation_, const Eigen::Vector3d &translation_, 
         const Eigen::Vector3d &velocity_, const Eigen::Vector3d& ba_, const Eigen::Vector3d& bg_)
-    : rotation{rotation_}, translation{translation_}, velocity{velocity_}, ba{ba_}, bg{bg_}
+    : rotation_end{rotation_}, translation_end{translation_}, velocity{velocity_}, ba{ba_}, bg{bg_}
 {
     dt_buf.push_back(0);
-    rot_buf.push_back(rotation);
-    trans_buf.push_back(translation);
+    rot_buf.push_back(rotation_end);
+    trans_buf.push_back(translation_end);
     velo_buf.push_back(velocity);
 
     pre_integration = nullptr;
@@ -16,11 +16,13 @@ state::state(const state* state_temp, bool copy)
 {
     if(copy)
     {
-        rotation = state_temp->rotation;
-        translation = state_temp->translation;
+        rotation_last_end = state_temp->rotation_last_end;
+        translation_last_end = state_temp->translation_last_end;
+        rotation_end = state_temp->rotation_end;
+        translation_end = state_temp->translation_end;
 
-        rotation_begin = state_temp->rotation_begin;
-        translation_begin = state_temp->translation_begin;
+        rotation_middle = state_temp->rotation_middle;
+        translation_middle = state_temp->translation_middle;
 
         velocity = state_temp->velocity;
        /* ba = state_temp->ba;
@@ -42,21 +44,23 @@ state::state(const state* state_temp, bool copy)
     }
     else
     {
-        rotation_begin = state_temp->rotation;
-        translation_begin = state_temp->translation;
+        rotation_last_end = state_temp->rotation_last_end;
+        translation_last_end = state_temp->translation_last_end;
+        rotation_middle = state_temp->rotation_end;
+        translation_middle = state_temp->translation_end;
         velocity_begin = state_temp->velocity;
        /* ba_begin = state_temp->ba;
         bg_begin = state_temp->bg;*/
         
-        rotation = state_temp->rotation;
-        translation = state_temp->translation;
+        rotation_end = state_temp->rotation_end;
+        translation_end = state_temp->translation_end;
         velocity = state_temp->velocity;
        /* ba = state_temp->ba;
         bg = state_temp->bg;*/
 
         dt_buf.push_back(0);
-        rot_buf.push_back(rotation);
-        trans_buf.push_back(translation);
+        rot_buf.push_back(rotation_end);
+        trans_buf.push_back(translation_end);
         velo_buf.push_back(velocity);
         /*un_acc_buf.push_back(state_temp->un_acc_buf.back());
         un_omega_buf.push_back(state_temp->un_omega_buf.back());
@@ -339,9 +343,9 @@ void imuProcessing::process(double dt, const Eigen::Vector3d &linear_acceleratio
         acc_0 = linear_acceleration;
         gyr_0 = angular_velocity;
 
-        Eigen::Vector3d un_acc_0_temp = current_state->rotation * (acc_0 - current_state->ba) - G;
+        Eigen::Vector3d un_acc_0_temp = current_state->rotation_end * (acc_0 - current_state->ba) - G;
         Eigen::Vector3d un_gyr_temp = 0.5 * (gyr_0 + angular_velocity) - current_state->bg;
-        Eigen::Quaterniond rotation_temp = current_state->rotation * numType::deltaQ(un_gyr_temp * dt);
+        Eigen::Quaterniond rotation_temp = current_state->rotation_end * numType::deltaQ(un_gyr_temp * dt);
         Eigen::Vector3d un_acc_1_temp = rotation_temp * (linear_acceleration - current_state->ba) - G;
         Eigen::Vector3d un_acc_temp = 0.5 * (un_acc_0_temp + un_acc_1_temp);
 
@@ -357,17 +361,17 @@ void imuProcessing::process(double dt, const Eigen::Vector3d &linear_acceleratio
 
     current_state->pre_integration->push_back(dt, linear_acceleration, angular_velocity);
 
-    Eigen::Vector3d un_acc_0 = current_state->rotation * (acc_0 - current_state->ba) - G;
+    Eigen::Vector3d un_acc_0 = current_state->rotation_end * (acc_0 - current_state->ba) - G;
     Eigen::Vector3d un_gyr = 0.5 * (gyr_0 + angular_velocity) - current_state->bg;
-    current_state->rotation *= numType::deltaQ(un_gyr * dt);
-    Eigen::Vector3d un_acc_1 = current_state->rotation * (linear_acceleration - current_state->ba) - G;
+    current_state->rotation_end *= numType::deltaQ(un_gyr * dt);
+    Eigen::Vector3d un_acc_1 = current_state->rotation_end * (linear_acceleration - current_state->ba) - G;
     Eigen::Vector3d un_acc = 0.5 * (un_acc_0 + un_acc_1);
-    current_state->translation += dt * current_state->velocity + 0.5 * dt * dt * un_acc;
+    current_state->translation_end += dt * current_state->velocity + 0.5 * dt * dt * un_acc;
     current_state->velocity += dt * un_acc;
 
     current_state->dt_buf.push_back(dt + current_state->dt_buf.back());
-    current_state->rot_buf.push_back(current_state->rotation);
-    current_state->trans_buf.push_back(current_state->translation);
+    current_state->rot_buf.push_back(current_state->rotation_end);
+    current_state->trans_buf.push_back(current_state->translation_end);
     current_state->velo_buf.push_back(current_state->velocity);
     current_state->un_acc_buf.push_back(un_acc);
     current_state->un_omega_buf.push_back(un_gyr);

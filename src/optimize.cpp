@@ -39,33 +39,19 @@ optimizeSummary lioOptimization::optimizeByAnalyticLidar(const icpOptions &cur_i
     {
         // 从历史帧状态中将前一状态直接赋值
         previous_state = all_cloud_frame[p_frame->id - sweep_cut_num]->p_state;
-        previous_translation = previous_state->translation;
+        previous_translation = previous_state->translation_end;
         // 前一状态的位移速度
-        previous_velocity = previous_state->translation - previous_state->translation_begin;
-        previous_orientation = Eigen::Quaterniond(previous_state->rotation);
+        previous_velocity = previous_state->translation_end - previous_state->translation_middle;
+        previous_orientation = Eigen::Quaterniond(previous_state->rotation_end);
     }
     // 当前状态 当前帧的值为每帧初始化阶段的预测值
+    // 优化变量
     state *current_state = p_frame->p_state;
-    Eigen::Quaterniond begin_quat = Eigen::Quaterniond(current_state->rotation_begin);
-    Eigen::Quaterniond end_quat = Eigen::Quaterniond(current_state->rotation);
-    Eigen::Vector3d begin_t = current_state->translation_begin;
-    Eigen::Vector3d end_t = current_state->translation;
+    Eigen::Quaterniond middle_quat = Eigen::Quaterniond(current_state->rotation_middle);
+    Eigen::Quaterniond end_quat = Eigen::Quaterniond(current_state->rotation_end);
+    Eigen::Vector3d middle_t = current_state->translation_middle;
+    Eigen::Vector3d end_t = current_state->translation_end;
 
-    // sweep_cut_num = 1 以下的没用
-    std::vector<Eigen::Quaterniond, Eigen::aligned_allocator<Eigen::Quaterniond>> v_inter_quat;
-    std::vector<Eigen::Vector3d, Eigen::aligned_allocator<Eigen::Vector3d>> v_inter_trans;
-    std::vector<double> v_inter_time;
-
-    v_inter_quat.reserve(sweep_cut_num - 1);
-    v_inter_trans.reserve(sweep_cut_num - 1);
-    v_inter_time.reserve(sweep_cut_num - 1);
-
-    for (int i = 1; i < sweep_cut_num; i++)
-    {
-        v_inter_quat.push_back(all_cloud_frame[p_frame->id - i]->p_state->rotation);
-        v_inter_trans.push_back(all_cloud_frame[p_frame->id - i]->p_state->translation);
-        v_inter_time.push_back(all_cloud_frame[p_frame->id - i]->time_sweep_end);
-    }
 
     // icp迭代次数 初始化阶段选择15和参数的最大值 其他阶段按照参数默认为5
     int num_iter_icp = p_frame->frame_id < cur_icp_options.init_num_frames ? std::max(15, cur_icp_options.num_iters_icp) :
@@ -76,19 +62,19 @@ optimizeSummary lioOptimization::optimizeByAnalyticLidar(const icpOptions &cur_i
     {
         Eigen::Matrix3d R;
         Eigen::Vector3d t;
-        for (auto &keypoint: keypoints) {
-            if (cur_icp_options.point_to_plane_with_distortion || cur_icp_options.distance == CT_POINT_TO_PLANE)
+        for (auto &keypoint: keypoints)
+        {
+            double alpha_time = keypoint.alpha_time;
+            if (alpha_time <= 0.5)
             {
-                double alpha_time = keypoint.alpha_time;
-                Eigen::Quaterniond q = begin_quat.slerp(alpha_time, end_quat);
-                q.normalize();
-                R = q.toRotationMatrix();
-                t = (1.0 - alpha_time) * begin_t + alpha_time * end_t;
-            } else {
-                R = end_quat.normalized().toRotationMatrix();
-                t = end_t;
+                R = current_state->rotation_last_end.slerp(alpha_time * 2, middle_quat).normalized().toRotationMatrix();
+                t = current_state->translation_last_end + alpha_time * 2 * (middle_t - current_state->translation_last_end);
             }
-
+            else
+            {
+                R = middle_quat.slerp(alpha_time * 2 - 1, end_quat).normalized().toRotationMatrix();
+                t = middle_t + (alpha_time * 2 - 1) * (end_t - middle_t);
+            }
             keypoint.point = R * (R_imu_lidar * keypoint.raw_point + t_imu_lidar) + t;
         }
     };
@@ -102,7 +88,7 @@ optimizeSummary lioOptimization::optimizeByAnalyticLidar(const icpOptions &cur_i
         planarity_weight = std::pow(neighborhood.a2D, cur_icp_options.power_planarity);
 
 
-        if (neighborhood.normal.dot(p_frame->p_state->translation_begin - location) < 0)
+        if (neighborhood.normal.dot(p_frame->p_state->translation_middle - location) < 0)
         {
             neighborhood.normal = -1.0 * neighborhood.normal;
         }
@@ -150,27 +136,10 @@ optimizeSummary lioOptimization::optimizeByAnalyticLidar(const icpOptions &cur_i
 //        ceres::LocalParameterization *parameterization = new RotationParameterization();
         ceres::LocalParameterization *parameterization = new ceres::EigenQuaternionParameterization();
 
-        switch (cur_icp_options.distance)
-        {
-            case CT_POINT_TO_PLANE:
-                // 添加参数块 初始时刻的位姿 结束时刻的位姿
-                problem.AddParameterBlock(&begin_quat.x(), 4, parameterization);
-                problem.AddParameterBlock(&end_quat.x(), 4, parameterization);
-                problem.AddParameterBlock(&begin_t.x(), 3);
-                problem.AddParameterBlock(&end_t.x(), 3);
-
-                // 下面的没用
-                for (int i = 0; i < sweep_cut_num - 1; i++)
-                {
-                    problem.AddParameterBlock(&v_inter_quat[i].x(), 4, parameterization);
-                    problem.AddParameterBlock(&v_inter_trans[i].x(), 3);
-                }
-                break;
-            case POINT_TO_PLANE:
-                problem.AddParameterBlock(&end_quat.x(), 4, parameterization);
-                problem.AddParameterBlock(&end_t.x(), 3);
-                break;
-        }
+        problem.AddParameterBlock(&middle_quat.x(), 4, parameterization);
+        problem.AddParameterBlock(&end_quat.x(), 4, parameterization);
+        problem.AddParameterBlock(&middle_t.x(), 3);
+        problem.AddParameterBlock(&end_t.x(), 3);
 
         int num_residuals = 0;
 
@@ -229,47 +198,35 @@ optimizeSummary lioOptimization::optimizeByAnalyticLidar(const icpOptions &cur_i
                     norm_vector.normalize();
                     double norm_offset = - norm_vector.dot(vector_neighbors[i]);
 
-                    // 计算残差
-                    switch (cur_icp_options.distance)
-                    {
-                        case CT_POINT_TO_PLANE:
-                        {
-                            // 这里使用了原始的点
-                            //CTLidarPlaneNormFactor *cost_function = new CTLidarPlaneNormFactor(keypoints[k].raw_point, norm_vector, norm_offset, keypoints[k].alpha_time, weight);
-                            ceres::CostFunction* cost_function = CTLidarPlaneNormFactorAutoDiff::Create(keypoints[k].raw_point, norm_vector, norm_offset, keypoints[k].alpha_time, weight);
-                            problem.AddResidualBlock(cost_function, loss_function, &begin_t.x(), &begin_quat.x(), &end_t.x(), &end_quat.x());
 
-                            if (sweep_cut_num == 3)
-                            {
-                                if (keypoints[k].timestamp < p_frame->time_sweep_end && keypoints[k].timestamp > v_inter_time[0])
-                                {
-                                    double alpha = (keypoints[k].timestamp - v_inter_time[0]) / (p_frame->time_sweep_end - v_inter_time[0]);
-                                    CTLidarPlaneNormFactor *cost_function = new CTLidarPlaneNormFactor(keypoints[k].raw_point, norm_vector, norm_offset, alpha, weight);
-                                    problem.AddResidualBlock(cost_function, loss_function, &v_inter_trans[0].x(), &v_inter_quat[0].x(), &end_t.x(), &end_quat.x());
-                                }
-                                else if (keypoints[k].timestamp < v_inter_time[0] && keypoints[k].timestamp > v_inter_time[1])
-                                {
-                                    double alpha = (keypoints[k].timestamp - v_inter_time[1]) / (v_inter_time[0] - v_inter_time[1]);
-                                    CTLidarPlaneNormFactor *cost_function = new CTLidarPlaneNormFactor(keypoints[k].raw_point, norm_vector, norm_offset, alpha, weight);
-                                    problem.AddResidualBlock(cost_function, loss_function, &v_inter_trans[1].x(), &v_inter_quat[1].x(), &v_inter_trans[0].x(), &v_inter_quat[0].x());
-                                }
-                                else if (keypoints[k].timestamp < v_inter_time[1] && keypoints[k].timestamp > p_frame->time_sweep_begin)
-                                {
-                                    double alpha = (keypoints[k].timestamp - p_frame->time_sweep_begin) / (v_inter_time[1] - p_frame->time_sweep_begin);
-                                    CTLidarPlaneNormFactor *cost_function = new CTLidarPlaneNormFactor(keypoints[k].raw_point, norm_vector, norm_offset, alpha, weight);
-                                    problem.AddResidualBlock(cost_function, loss_function, &begin_t.x(), &begin_quat.x(), &v_inter_trans[1].x(), &v_inter_quat[1].x());
-                                }
-                            }  
-                            break;
-                        }
-                        case POINT_TO_PLANE:
-                        {
-                            Eigen::Vector3d point_end = end_quat.inverse() * keypoints[k].point - end_quat.inverse() * end_t;
-                            LidarPlaneNormFactor *cost_function = new LidarPlaneNormFactor(point_end, norm_vector, norm_offset, weight);
-                            problem.AddResidualBlock(cost_function, loss_function, &end_t.x(), &end_quat.x());
-                            break;
-                        }
+                    // 这里使用了原始的点
+                    //CTLidarPlaneNormFactor *cost_function = new CTLidarPlaneNormFactor(keypoints[k].raw_point, norm_vector, norm_offset, keypoints[k].alpha_time, weight);
+
+                    //ceres::CostFunction* cost_function = CTLidarPlaneNormFactorAutoDiff::Create(keypoints[k].raw_point, norm_vector, norm_offset, keypoints[k].alpha_time, weight);
+
+                    ceres::CostFunction* cost_function1 = MCTLidarPlaneNormFactorFirstAutoDiff::Create(keypoints[k].raw_point, current_state->rotation_last_end, current_state->translation_last_end,
+                                                                                                      norm_vector, norm_offset, keypoints[k].alpha_time, weight);
+                    problem.AddResidualBlock(cost_function1, loss_function, &middle_t.x(), &middle_quat.x());
+
+                    ceres::CostFunction* cost_function2 = MCTLidarPlaneNormFactorSecondAutoDiff::Create(keypoints[k].raw_point, current_state->rotation_last_end, current_state->translation_last_end,
+                                                                                                       norm_vector, norm_offset, keypoints[k].alpha_time, weight);
+                    problem.AddResidualBlock(cost_function2, loss_function, &middle_t.x(), &middle_quat.x(), &end_t.x(), &end_quat.x());
+
+                    /*if (keypoints[k].alpha_time <= 0.5)
+                    {
+                        ceres::CostFunction* cost_function = MCTLidarPlaneNormFactorFirstAutoDiff::Create(keypoints[k].raw_point, current_state->rotation_last_end, current_state->translation_last_end,
+                                                                                                     norm_vector, norm_offset, keypoints[k].alpha_time, weight);
+                        problem.AddResidualBlock(cost_function, loss_function, &middle_t.x(), &middle_quat.x());
                     }
+                    else if (keypoints[k].alpha_time <= 1.0)
+                    {
+                        ceres::CostFunction* cost_function = MCTLidarPlaneNormFactorSecondAutoDiff::Create(keypoints[k].raw_point, current_state->rotation_last_end, current_state->translation_last_end,
+                                                                                                     norm_vector, norm_offset, keypoints[k].alpha_time, weight);
+                        problem.AddResidualBlock(cost_function, loss_function, &middle_t.x(), &middle_quat.x(), &end_t.x(), &end_quat.x());
+                    }*/
+
+
+
                 }
             }
 
@@ -277,21 +234,6 @@ optimizeSummary lioOptimization::optimizeByAnalyticLidar(const icpOptions &cur_i
             if(num_residuals >= cur_icp_options.max_num_residuals) break;
         }
 
-        // 对于第三帧以后 引入恒定速度和位置约束
-        if (p_frame->frame_id > sweep_cut_num)
-        {
-            if (cur_icp_options.distance == CT_POINT_TO_PLANE)
-            {
-                LocationConsistencyFactor *cost_location_consistency = new LocationConsistencyFactor(previous_translation, sqrt(num_residuals * cur_icp_options.beta_location_consistency * laser_point_cov));
-                // problem.AddResidualBlock(cost_location_consistency, nullptr, &begin_t.x());
-
-                RotationConsistencyFactor *cost_rotation_consistency = new RotationConsistencyFactor(previous_orientation, sqrt(num_residuals * cur_icp_options.beta_orientation_consistency * laser_point_cov));
-                // problem.AddResidualBlock(cost_rotation_consistency, nullptr, &begin_quat.x());
-
-                SmallVelocityFactor *cost_small_velocity = new SmallVelocityFactor(sqrt(num_residuals * cur_icp_options.beta_small_velocity * laser_point_cov));
-                // problem.AddResidualBlock(cost_small_velocity, nullptr, &begin_t.x(), &end_t.x());
-            }
-        }
 
         // 当前帧添加的残差数量小于20 约束不足
         // 也就是能不能找到 可以匹配到满足要求最近点的 20个当前帧关键点
@@ -330,49 +272,28 @@ optimizeSummary lioOptimization::optimizeByAnalyticLidar(const icpOptions &cur_i
         }
 
         // 单位化
-        begin_quat.normalize();
+        middle_quat.normalize();
         end_quat.normalize();
 
         double diff_trans = 0, diff_rot = 0;
 
-        for (int i = 1; i < sweep_cut_num - 1; i++)
-        {
-            v_inter_quat[i].normalize();
-
-            diff_trans += (all_cloud_frame[p_frame->id - i]->p_state->translation - v_inter_trans[i - 1]).norm();
-            diff_rot += AngularDistance(all_cloud_frame[p_frame->id - i]->p_state->rotation, v_inter_quat[i - 1]);
-        }
-
         // 计算当前优化结束后 四个状态的变化量 当变化量小于阈值时 也认为是ICP收敛
-        diff_trans += (current_state->translation_begin - begin_t).norm();
-        diff_rot += AngularDistance(current_state->rotation_begin, begin_quat);
+        diff_trans += (current_state->translation_middle - middle_t).norm();
+        diff_rot += AngularDistance(current_state->rotation_middle, middle_quat);
 
-        diff_trans += (current_state->translation - end_t).norm();
-        diff_rot += AngularDistance(current_state->rotation, end_quat);
+        diff_trans += (current_state->translation_end - end_t).norm();
+        diff_rot += AngularDistance(current_state->rotation_end, end_quat);
 
         // 将估计出的值赋给最新的当前帧状态量
-        switch (cur_icp_options.distance)
-        {
-            case CT_POINT_TO_PLANE:
-                current_state->translation_begin = begin_t;
-                current_state->translation = end_t;
-                current_state->rotation_begin = begin_quat;
-                current_state->rotation = end_quat;
-                for (int i = 1; i < sweep_cut_num; i++)
-                {
-                    all_cloud_frame[p_frame->id - i]->p_state->translation = v_inter_trans[i - 1];
-                    all_cloud_frame[p_frame->id - i]->p_state->rotation = v_inter_quat[i - 1];
-                }
-                break;
-            case POINT_TO_PLANE:
-                current_state->translation = end_t;
-                current_state->rotation = end_quat;
-                break;
-        }
+
+        current_state->translation_middle = middle_t;
+        current_state->translation_end = end_t;
+        current_state->rotation_middle = middle_quat;
+        current_state->rotation_end = end_quat;
 
         if ((p_frame->frame_id > sweep_cut_num) &&
-            (diff_rot < cur_icp_options.threshold_orientation_norm &&
-             diff_trans < cur_icp_options.threshold_translation_norm))
+            (diff_rot < cur_icp_options.threshold_orientation_norm/2 &&
+             diff_trans < cur_icp_options.threshold_translation_norm/2))
         {
 
             if (cur_icp_options.debug_print)
@@ -406,16 +327,16 @@ optimizeSummary lioOptimization::optimizeByAnalyticLio(const icpOptions &cur_icp
 
     if (p_frame->frame_id > sweep_cut_num) {
         previous_state = all_cloud_frame[p_frame->id - sweep_cut_num]->p_state;
-        previous_translation = previous_state->translation;
-        previous_velocity = previous_state->translation - previous_state->translation_begin;
-        previous_orientation = Eigen::Quaterniond(previous_state->rotation);
+        previous_translation = previous_state->translation_end;
+        previous_velocity = previous_state->translation_end - previous_state->translation_middle;
+        previous_orientation = Eigen::Quaterniond(previous_state->rotation_end);
     }
 
     state *current_state = p_frame->p_state;
-    Eigen::Quaterniond begin_quat = Eigen::Quaterniond(current_state->rotation_begin);
-    Eigen::Quaterniond end_quat = Eigen::Quaterniond(current_state->rotation);
-    Eigen::Vector3d begin_t = current_state->translation_begin;
-    Eigen::Vector3d end_t = current_state->translation;
+    Eigen::Quaterniond begin_quat = Eigen::Quaterniond(current_state->rotation_middle);
+    Eigen::Quaterniond end_quat = Eigen::Quaterniond(current_state->rotation_end);
+    Eigen::Vector3d begin_t = current_state->translation_middle;
+    Eigen::Vector3d end_t = current_state->translation_end;
 
     Eigen::Matrix<double, 9 ,1> begin_velocity_bias;
     begin_velocity_bias.segment<3>(0) = current_state->velocity_begin;
@@ -438,8 +359,8 @@ optimizeSummary lioOptimization::optimizeByAnalyticLio(const icpOptions &cur_icp
 
     for (int i = 1; i < sweep_cut_num; i++)
     {
-        v_inter_quat.push_back(all_cloud_frame[p_frame->id - i]->p_state->rotation);
-        v_inter_trans.push_back(all_cloud_frame[p_frame->id - i]->p_state->translation);
+        v_inter_quat.push_back(all_cloud_frame[p_frame->id - i]->p_state->rotation_end);
+        v_inter_trans.push_back(all_cloud_frame[p_frame->id - i]->p_state->translation_end);
 
         Eigen::Matrix<double, 9 ,1> inter_velocity_bias;
         inter_velocity_bias.segment<3>(0) = all_cloud_frame[p_frame->id - i]->p_state->velocity;
@@ -480,7 +401,7 @@ optimizeSummary lioOptimization::optimizeByAnalyticLio(const icpOptions &cur_icp
         auto neighborhood = computeNeighborhoodDistribution(vector_neighbors);
         planarity_weight = std::pow(neighborhood.a2D, cur_icp_options.power_planarity);
 
-        if (neighborhood.normal.dot(p_frame->p_state->translation_begin - location) < 0) {
+        if (neighborhood.normal.dot(p_frame->p_state->translation_middle - location) < 0) {
             neighborhood.normal = -1.0 * neighborhood.normal;
         }
         return neighborhood;
@@ -722,45 +643,45 @@ optimizeSummary lioOptimization::optimizeByAnalyticLio(const icpOptions &cur_icp
         {
             v_inter_quat[i].normalize();
 
-            diff_trans += (all_cloud_frame[p_frame->id - i]->p_state->translation - v_inter_trans[i - 1]).norm();
-            diff_rot += AngularDistance(all_cloud_frame[p_frame->id - i]->p_state->rotation, v_inter_quat[i - 1]);
+            diff_trans += (all_cloud_frame[p_frame->id - i]->p_state->translation_end - v_inter_trans[i - 1]).norm();
+            diff_rot += AngularDistance(all_cloud_frame[p_frame->id - i]->p_state->rotation_end, v_inter_quat[i - 1]);
             diff_velocity += (all_cloud_frame[p_frame->id - i]->p_state->velocity - v_inter_velocity_bias[i - 1].segment<3>(0)).norm();
         }
 
-        diff_trans += (current_state->translation_begin - begin_t).norm();
-        diff_rot += AngularDistance(current_state->rotation_begin, begin_quat);
+        diff_trans += (current_state->translation_middle - begin_t).norm();
+        diff_rot += AngularDistance(current_state->rotation_middle, begin_quat);
         diff_velocity += (current_state->velocity_begin - begin_velocity_bias.segment<3>(0)).norm();
 
-        diff_trans += (current_state->translation - end_t).norm();
-        diff_rot += AngularDistance(current_state->rotation, end_quat);
+        diff_trans += (current_state->translation_end - end_t).norm();
+        diff_rot += AngularDistance(current_state->rotation_end, end_quat);
         diff_velocity += (current_state->velocity - end_velocity_bias.segment<3>(0)).norm();
 
         switch (cur_icp_options.distance) {
             case CT_POINT_TO_PLANE:
-                current_state->translation_begin = begin_t;
-                current_state->rotation_begin = begin_quat;
+                current_state->translation_middle = begin_t;
+                current_state->rotation_middle = begin_quat;
                 current_state->velocity_begin = begin_velocity_bias.segment<3>(0);
                 current_state->ba_begin = begin_velocity_bias.segment<3>(3);
                 current_state->bg_begin = begin_velocity_bias.segment<3>(6);
 
-                current_state->translation = end_t;
-                current_state->rotation = end_quat;
+                current_state->translation_end = end_t;
+                current_state->rotation_end = end_quat;
                 current_state->velocity = end_velocity_bias.segment<3>(0);
                 current_state->ba = end_velocity_bias.segment<3>(3);
                 current_state->bg = end_velocity_bias.segment<3>(6);
 
                 for (int i = 1; i < sweep_cut_num; i++)
                 {
-                    all_cloud_frame[p_frame->id - i]->p_state->translation = v_inter_trans[i - 1];
-                    all_cloud_frame[p_frame->id - i]->p_state->rotation = v_inter_quat[i - 1];
+                    all_cloud_frame[p_frame->id - i]->p_state->translation_end = v_inter_trans[i - 1];
+                    all_cloud_frame[p_frame->id - i]->p_state->rotation_end = v_inter_quat[i - 1];
                     all_cloud_frame[p_frame->id - i]->p_state->velocity = v_inter_velocity_bias[i - 1].segment<3>(0);
                     all_cloud_frame[p_frame->id - i]->p_state->ba = v_inter_velocity_bias[i - 1].segment<3>(3);
                     all_cloud_frame[p_frame->id - i]->p_state->bg = v_inter_velocity_bias[i - 1].segment<3>(6);
                 }
                 break;
             case POINT_TO_PLANE:
-                current_state->translation = end_t;
-                current_state->rotation = end_quat;
+                current_state->translation_end = end_t;
+                current_state->rotation_end = end_quat;
                 current_state->velocity = end_velocity_bias.segment<3>(0);
                 current_state->ba = end_velocity_bias.segment<3>(3);
                 current_state->bg = end_velocity_bias.segment<3>(6);
@@ -972,16 +893,9 @@ estimationSummary lioOptimization::optimize(cloudFrame *p_frame, const icpOption
 
     {
         optimizeSummary optimize_summary;
-        // LIO模式且初始化完成
-        if (options.optimize_options.solver == LIO && initial_flag)
-        {
-            optimize_summary = optimizeByAnalyticLio(cur_icp_options, voxel_map, keypoints, p_frame);
-        }
-        // 其他模式情况
-        else
-        {
-            optimize_summary = optimizeByAnalyticLidar(cur_icp_options, voxel_map, keypoints, p_frame);
-        }
+
+        optimize_summary = optimizeByAnalyticLidar(cur_icp_options, voxel_map, keypoints, p_frame);
+
         summary.success = optimize_summary.success;
         summary.number_of_residuals = optimize_summary.num_residuals_used;
 
@@ -990,13 +904,14 @@ estimationSummary lioOptimization::optimize(cloudFrame *p_frame, const icpOption
             return summary;
         }
         // 更新当前状态量
-        Eigen::Quaterniond q_begin = p_frame->p_state->rotation_begin;
-        Eigen::Quaterniond q_end = p_frame->p_state->rotation;
-        Eigen::Vector3d t_begin = p_frame->p_state->translation_begin;
-        Eigen::Vector3d t_end = p_frame->p_state->translation;
+        Eigen::Quaterniond q_middle = p_frame->p_state->rotation_middle;
+        Eigen::Quaterniond q_end = p_frame->p_state->rotation_end;
+        Eigen::Vector3d t_middle = p_frame->p_state->translation_middle;
+        Eigen::Vector3d t_end = p_frame->p_state->translation_end;
         for (auto &point_temp: p_frame->point_frame)
         {
-            transformPoint(options.motion_compensation, point_temp, q_begin, q_end, t_begin, t_end, R_imu_lidar, t_imu_lidar);
+            // transformPoint(options.motion_compensation, point_temp, q_begin, q_end, t_begin, t_end, R_imu_lidar, t_imu_lidar);
+            transformPoint(options.motion_compensation, point_temp, p_frame->p_state->rotation_last_end, q_middle, q_end, p_frame->p_state->translation_last_end, t_middle, t_end, R_imu_lidar, t_imu_lidar);
         }
     }
     std::vector<point3D>().swap(summary.keypoints);

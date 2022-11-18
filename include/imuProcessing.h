@@ -17,15 +17,19 @@ class state
 {
 public:
 
-	Eigen::Quaterniond rotation;
-	Eigen::Vector3d translation;
+	Eigen::Quaterniond rotation_end;
+	Eigen::Vector3d translation_end;
 	Eigen::Vector3d velocity;
 	Eigen::Vector3d ba;
 	Eigen::Vector3d bg;
 	imuIntegration *pre_integration;
+    // 添加的上一帧的结束时刻状态
+    Eigen::Quaterniond rotation_last_end;
+    Eigen::Vector3d translation_last_end;
 
-	Eigen::Quaterniond rotation_begin;
-	Eigen::Vector3d translation_begin;
+    // 修改状态量名称 分别为中间时刻的位姿和结束时刻的位姿
+	Eigen::Quaterniond rotation_middle;
+	Eigen::Vector3d translation_middle;
 	Eigen::Vector3d velocity_begin;
 	Eigen::Vector3d ba_begin;
 	Eigen::Vector3d bg_begin;

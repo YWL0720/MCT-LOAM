@@ -2,8 +2,8 @@
 
 ImuFactor::ImuFactor(imuIntegration* pre_integration_, state* last_state_) : pre_integration(pre_integration_)
 {
-	rot_last = last_state_->rotation;
-	tran_last = last_state_->translation;
+	rot_last = last_state_->rotation_end;
+	tran_last = last_state_->translation_end;
 	velocity_last = last_state_->velocity;
 	ba_last = last_state_->ba;
 	bg_last = last_state_->bg;

@@ -562,16 +562,6 @@ void lioOptimization::makePointTimestamp(std::vector<point3D> &sweep, double tim
     if(cloud_pro->isPointTimeEnable())
     {
         if (sweep_cut_num == 1) return;
-
-        double delta_t = time_sweep_end - time_sweep_begin;
-
-        for (int i = 0; i < sweep.size(); i++)
-        {
-            sweep[i].relative_time = sweep[i].timestamp - time_sweep_begin;
-            sweep[i].alpha_time = sweep[i].relative_time / delta_t;
-            sweep[i].relative_time = sweep[i].relative_time * 1000.0;
-            if(sweep[i].alpha_time > 1.0) sweep[i].alpha_time = 1.0 - 1e-5;
-        }
     }
     else
     {
@@ -616,53 +606,41 @@ cloudFrame* lioOptimization::buildFrame(std::vector<point3D> &const_frame, state
     double dt_offset = 0;
 
     // 时间偏置 大于第一帧时 时间偏置 = 当前帧初始时刻 - 上一帧结束时刻
-    if(sweep_cut_num == 1)
-    {   
-        if(index_frame > sweep_cut_num)
-            dt_offset -= time_frame_begin - all_cloud_frame.back()->time_sweep_end;
-    }
-    else
-    {
-        int i = all_cloud_frame.size() - 1;
-
-        while(i >= 0 && all_cloud_frame[i]->sub_id != 0)
-        {
-            dt_offset += all_cloud_frame[i]->p_state->dt_buf.back();
-            i--;
-        }
-
-        if(index_frame > sweep_cut_num)
-            dt_offset -= (i == all_cloud_frame.size() - 1 ?  time_frame_begin : all_cloud_frame[i + 1]->time_frame_begin) - all_cloud_frame[i]->time_frame_end;
-    }
+    if(index_frame > sweep_cut_num)
+        dt_offset -= time_frame_begin - all_cloud_frame.back()->time_sweep_end;
 
     // 给当前帧的每个点都配置好时间信息
     makePointTimestamp(frame, time_sweep_begin, timestamp_begin + timestamp_offset);
 
+
+    // TODO WARNING 前两帧的时间比例都是1 尚不清楚之后怎么修改
     // 对于前两帧 每个点的时间比例都是1 前两帧好像也不是连续时间表示
-    if (index_frame <= sweep_cut_num + 1)
+    /*if (index_frame <= sweep_cut_num + 1)
     {
         for (auto &point_temp: frame)
         {
             point_temp.alpha_time = 1.0;
         }
-    }
+    }*/
 
     // 第三帧以后
     if (index_frame > sweep_cut_num + 1)
     {
         // 对于恒定速度表示法
-        if (options.motion_compensation == CONSTANT_VELOCITY)
+        // 没用
+        /*if (options.motion_compensation == CONSTANT_VELOCITY)
         {
             // 将当前帧的点 全部转换到当前帧结束时刻的雷达坐标系下
-            distortFrame(frame, cur_state->rotation_begin, cur_state->rotation, cur_state->translation_begin, cur_state->translation, R_imu_lidar, t_imu_lidar);
-        }
+            distortFrame(frame, cur_state->rotation_middle, cur_state->rotation_end, cur_state->translation_middle, cur_state->translation_end, R_imu_lidar, t_imu_lidar);
+        }*/
 
         for (auto &point_temp: frame)
         {
             // 如果是恒定速度表示法 则将点根据当前帧结束时刻的位姿转换到世界坐标系下
             // 如果是连续时间表示法 则根据每个点时刻的位姿 将点转换到世界坐标系下
             // 点的世界坐标存储在point中 原始坐标存储在raw_point中
-            transformPoint(options.motion_compensation, point_temp, cur_state->rotation_begin, cur_state->rotation, cur_state->translation_begin, cur_state->translation, R_imu_lidar, t_imu_lidar);
+            transformPoint(options.motion_compensation, point_temp, cur_state->rotation_last_end, cur_state->rotation_middle, cur_state->rotation_end, cur_state->translation_last_end, cur_state->translation_middle, cur_state->translation_end, R_imu_lidar, t_imu_lidar);
+            // transformPoint(options.motion_compensation, point_temp, cur_state->rotation_middle, cur_state->rotation_end, cur_state->translation_middle, cur_state->translation_end, R_imu_lidar, t_imu_lidar);
         }
     }
     // 前两帧初始化的情况
@@ -672,7 +650,8 @@ cloudFrame* lioOptimization::buildFrame(std::vector<point3D> &const_frame, state
         {
             Eigen::Quaterniond q_identity = Eigen::Quaterniond::Identity();
             Eigen::Vector3d t_zero = Eigen::Vector3d::Zero();
-            transformPoint(options.motion_compensation, point_temp, q_identity, q_identity, t_zero, t_zero, R_imu_lidar, t_imu_lidar);
+            // 调用重载版本
+            transformPoint(options.motion_compensation, point_temp, q_identity, q_identity, q_identity, t_zero, t_zero, t_zero, R_imu_lidar, t_imu_lidar);
         }
     }
 
@@ -695,6 +674,7 @@ cloudFrame* lioOptimization::buildFrame(std::vector<point3D> &const_frame, state
     return p_frame;
 }
 
+// 系统初始化修改
 void lioOptimization::stateInitialization(state *cur_state)
 {
     // registered_frames的初始值为0
@@ -704,142 +684,52 @@ void lioOptimization::stateInitialization(state *cur_state)
     if (index_frame <= sweep_cut_num + 1)
     {
         // 前两帧的初始状态全部为单位状态
-        cur_state->rotation_begin = Eigen::Quaterniond::Identity();
-        cur_state->translation_begin = Eigen::Vector3d::Zero();
-        cur_state->rotation = Eigen::Quaterniond::Identity();
-        cur_state->translation = Eigen::Vector3d::Zero();
+        // 11.18 -- 修改state状态量 中间时刻的位姿和结束时刻的位姿
+        cur_state->rotation_middle = Eigen::Quaterniond::Identity();
+        cur_state->translation_middle = Eigen::Vector3d::Zero();
+        cur_state->rotation_end = Eigen::Quaterniond::Identity();
+        cur_state->translation_end = Eigen::Vector3d::Zero();
+
+        cur_state->rotation_last_end = Eigen::Quaterniond::Identity();
+        cur_state->translation_last_end = Eigen::Vector3d::Zero();
     }
-    else if (index_frame == sweep_cut_num + 2)
+    else
     {
         // 第三帧
         // 初始化模式为 恒定速度初始化 或 IMU初始化模式
-        // 对当前帧的装填进行预测
-        if (options.initialization == INIT_CONSTANT_VELOCITY)
-        {
-            // 当前帧初始时刻的位姿等于上一帧结束时刻的位姿
-            // 当前帧结束时刻的位姿等于 上一帧结束时刻的位姿 * 上上一帧结束时刻的位姿.inverse() * 上一帧结束时刻的位姿
-            Eigen::Quaterniond q_next_end = all_cloud_frame[all_cloud_frame.size() - 1]->p_state->rotation * 
-                    all_cloud_frame[all_cloud_frame.size() - 2]->p_state->rotation.inverse() * all_cloud_frame[all_cloud_frame.size() - 1]->p_state->rotation;
+        // 对当前帧的状态进行预测
 
-            Eigen::Vector3d t_next_end = all_cloud_frame[all_cloud_frame.size() - 1]->p_state->translation + 
-                                         all_cloud_frame[all_cloud_frame.size() - 1]->p_state->rotation * 
-                                         all_cloud_frame[all_cloud_frame.size() - 2]->p_state->rotation.inverse() * 
-                                         (all_cloud_frame[all_cloud_frame.size() - 1]->p_state->translation - 
-                                         all_cloud_frame[all_cloud_frame.size() - 2]->p_state->translation);
+        // 修改
+        // 当前帧中间时刻的位姿 = 上一帧结束时刻的位姿 * 上一帧中间时刻的位姿.inverse() * 上一帧结束时刻的位姿
+        // 当前帧结束时刻的位姿 = 上一帧结束时刻的位姿 * 上一帧中间时刻的位姿.inverse() * 上一帧结束时刻的位姿 * 上一帧中间时刻的位姿.inverse() * 上一帧结束时刻的位姿
 
-            cur_state->rotation_begin = all_cloud_frame[all_cloud_frame.size() - sweep_cut_num]->p_state->rotation;
-            cur_state->translation_begin = all_cloud_frame[all_cloud_frame.size() - sweep_cut_num]->p_state->translation;
-            cur_state->rotation = q_next_end;
-            cur_state->translation = t_next_end;
-        }
-        else if (options.initialization == INIT_IMU)
-        {
-            // IMU初始化模式 基本是一致的
-            if (initial_flag)
-            {
-                cur_state->rotation_begin = all_cloud_frame[all_cloud_frame.size() - sweep_cut_num]->p_state->rotation;
-                cur_state->translation_begin = all_cloud_frame[all_cloud_frame.size() - sweep_cut_num]->p_state->translation;
-            }
-            else
-            {
-                Eigen::Quaterniond q_next_end = all_cloud_frame[all_cloud_frame.size() - 1]->p_state->rotation * 
-                        all_cloud_frame[all_cloud_frame.size() - 2]->p_state->rotation.inverse() * all_cloud_frame[all_cloud_frame.size() - 1]->p_state->rotation;
+        // 我们这里统一规定采用四元数左乘的形式 即 q_1 = \delta q * q_0   || \delta q = q_1 * q_0^-1
+        Eigen::Quaterniond q_next_middle = all_cloud_frame.back()->p_state->rotation_end *
+                                            all_cloud_frame.back()->p_state->rotation_middle.inverse() *
+                                            all_cloud_frame.back()->p_state->rotation_end;
+        Eigen::Vector3d t_next_middle = all_cloud_frame.back()->p_state->translation_end +
+                                        all_cloud_frame.back()->p_state->rotation_end *
+                                        all_cloud_frame.back()->p_state->rotation_middle.inverse() *
+                                        (all_cloud_frame.back()->p_state->translation_end -
+                                        all_cloud_frame.back()->p_state->translation_middle);
 
-                Eigen::Vector3d t_next_end = all_cloud_frame[all_cloud_frame.size() - 1]->p_state->translation + 
-                                             all_cloud_frame[all_cloud_frame.size() - 1]->p_state->rotation * 
-                                             all_cloud_frame[all_cloud_frame.size() - 2]->p_state->rotation.inverse() * 
-                                             (all_cloud_frame[all_cloud_frame.size() - 1]->p_state->translation - 
-                                             all_cloud_frame[all_cloud_frame.size() - 2]->p_state->translation);
+        Eigen::Quaterniond q_next_end = all_cloud_frame.back()->p_state->rotation_end *
+                                        all_cloud_frame.back()->p_state->rotation_middle.inverse() *
+                                        q_next_middle;
 
-                cur_state->rotation_begin = all_cloud_frame[all_cloud_frame.size() - sweep_cut_num]->p_state->rotation;
-                cur_state->translation_begin = all_cloud_frame[all_cloud_frame.size() - sweep_cut_num]->p_state->translation;
-                cur_state->rotation = q_next_end;
-                cur_state->translation = t_next_end;
-            }
-        }
-        else
-        {
-            // 其他初始化模式 直接将上一帧的各个状态赋值给当前帧
-            cur_state->rotation_begin = all_cloud_frame[all_cloud_frame.size() - 1]->p_state->rotation_begin;
-            cur_state->translation_begin = all_cloud_frame[all_cloud_frame.size() - 1]->p_state->translation_begin;
-            cur_state->rotation = all_cloud_frame[all_cloud_frame.size() - 1]->p_state->rotation;
-            cur_state->translation = all_cloud_frame[all_cloud_frame.size() - 1]->p_state->translation;
-        }
-    }
-    // 第三帧以后的情况
-    else
-    {
-        // 对于恒定速度初始化模式
-        if (options.initialization == INIT_CONSTANT_VELOCITY)
-        {
-            // 运动表示方法为连续时间
-            if(options.motion_compensation == CONTINUOUS)
-            {
-                Eigen::Quaterniond q_next_begin = all_cloud_frame[all_cloud_frame.size() - 1]->p_state->rotation_begin * 
-                        all_cloud_frame[all_cloud_frame.size() - 2]->p_state->rotation_begin.inverse() * all_cloud_frame[all_cloud_frame.size() - 1]->p_state->rotation_begin;
+        Eigen::Vector3d t_next_end = t_next_middle +
+                                    all_cloud_frame.back()->p_state->rotation_end *
+                                    all_cloud_frame.back()->p_state->rotation_middle.inverse() *
+                                    (all_cloud_frame.back()->p_state->translation_end -
+                                     all_cloud_frame.back()->p_state->translation_middle);
 
-                Eigen::Vector3d t_next_begin = all_cloud_frame[all_cloud_frame.size() - 1]->p_state->translation_begin + 
-                                               all_cloud_frame[all_cloud_frame.size() - 1]->p_state->rotation_begin * 
-                                               all_cloud_frame[all_cloud_frame.size() - 2]->p_state->rotation_begin.inverse() * 
-                                               (all_cloud_frame[all_cloud_frame.size() - 1]->p_state->translation_begin - 
-                                               all_cloud_frame[all_cloud_frame.size() - 2]->p_state->translation_begin);
-                // 连续时间表示下 当前帧初始时刻的位姿就等于上一帧结束时刻的位姿
-                cur_state->rotation_begin = all_cloud_frame[all_cloud_frame.size() - sweep_cut_num]->p_state->rotation;
-                cur_state->translation_begin = all_cloud_frame[all_cloud_frame.size() - sweep_cut_num]->p_state->translation;
-            }
-            else
-            {
-                // 其他表示方法也如此
-                cur_state->rotation_begin = all_cloud_frame[all_cloud_frame.size() - sweep_cut_num]->p_state->rotation;
-                cur_state->translation_begin = all_cloud_frame[all_cloud_frame.size() - sweep_cut_num]->p_state->translation;
-            }
+        cur_state->rotation_middle = q_next_middle;
+        cur_state->translation_middle = t_next_middle;
+        cur_state->rotation_end = q_next_end;
+        cur_state->translation_end = t_next_end;
 
-            // 当前帧结束时刻的位姿 = 上一帧结束时刻的位姿 * 上上一帧结束时刻的位姿.inverse() * 上一帧结束时刻的位姿
-            Eigen::Quaterniond q_next_end = all_cloud_frame[all_cloud_frame.size() - 1]->p_state->rotation * 
-                    all_cloud_frame[all_cloud_frame.size() - 2]->p_state->rotation.inverse() * all_cloud_frame[all_cloud_frame.size() - 1]->p_state->rotation;
-
-            Eigen::Vector3d t_next_end = all_cloud_frame[all_cloud_frame.size() - 1]->p_state->translation + 
-                                         all_cloud_frame[all_cloud_frame.size() - 1]->p_state->rotation * 
-                                         all_cloud_frame[all_cloud_frame.size() - 2]->p_state->rotation.inverse() * 
-                                         (all_cloud_frame[all_cloud_frame.size() - 1]->p_state->translation - 
-                                         all_cloud_frame[all_cloud_frame.size() - 2]->p_state->translation);
-
-            cur_state->rotation = q_next_end;
-            cur_state->translation = t_next_end;
-        }
-        // IMU初始化模式 貌似也没什么不同
-        else if (options.initialization == INIT_IMU)
-        {
-            if (initial_flag)
-            {
-                cur_state->rotation_begin = all_cloud_frame[all_cloud_frame.size() - sweep_cut_num]->p_state->rotation;
-                cur_state->translation_begin = all_cloud_frame[all_cloud_frame.size() - sweep_cut_num]->p_state->translation;
-            }
-            else
-            {
-                Eigen::Quaterniond q_next_end = all_cloud_frame[all_cloud_frame.size() - 1]->p_state->rotation * 
-                        all_cloud_frame[all_cloud_frame.size() - 2]->p_state->rotation.inverse() * all_cloud_frame[all_cloud_frame.size() - 1]->p_state->rotation;
-
-                Eigen::Vector3d t_next_end = all_cloud_frame[all_cloud_frame.size() - 1]->p_state->translation + 
-                                             all_cloud_frame[all_cloud_frame.size() - 1]->p_state->rotation * 
-                                             all_cloud_frame[all_cloud_frame.size() - 2]->p_state->rotation.inverse() * 
-                                             (all_cloud_frame[all_cloud_frame.size() - 1]->p_state->translation - 
-                                             all_cloud_frame[all_cloud_frame.size() - 2]->p_state->translation);
-
-                cur_state->rotation_begin = all_cloud_frame[all_cloud_frame.size() - sweep_cut_num]->p_state->rotation;
-                cur_state->translation_begin = all_cloud_frame[all_cloud_frame.size() - sweep_cut_num]->p_state->translation;
-                cur_state->rotation = q_next_end;
-                cur_state->translation = t_next_end;
-            }
-        }
-        // 其他初始化模式 直接将上一帧的状态量赋值到本帧
-        else
-        {
-            cur_state->rotation_begin = all_cloud_frame[all_cloud_frame.size() - 1]->p_state->rotation_begin;
-            cur_state->translation_begin = all_cloud_frame[all_cloud_frame.size() - 1]->p_state->translation_begin;
-            cur_state->rotation = all_cloud_frame[all_cloud_frame.size() - 1]->p_state->rotation;
-            cur_state->translation = all_cloud_frame[all_cloud_frame.size() - 1]->p_state->translation;
-        }
+        cur_state->rotation_last_end = all_cloud_frame.back()->p_state->rotation_end;
+        cur_state->translation_last_end = all_cloud_frame.back()->p_state->translation_end;
     }
 }
 
@@ -988,16 +878,16 @@ estimationSummary lioOptimization::poseEstimation(cloudFrame *p_frame)
             // 计算当前帧本次优化后的初始位置与上一帧结束位置之间的距离
             if(p_frame->frame_id > sweep_cut_num)
             {
-                summary.distance_correction = (p_frame->p_state->translation_begin - all_cloud_frame[p_frame->id - 1]->p_state->translation).norm();
+                summary.distance_correction = (p_frame->p_state->translation_middle - all_cloud_frame[p_frame->id - 1]->p_state->translation_end).norm();
 
-                summary.relative_orientation = AngularDistance(all_cloud_frame[p_frame->id - 1]->p_state->rotation, p_frame->p_state->rotation);
+                summary.relative_orientation = AngularDistance(all_cloud_frame[p_frame->id - 1]->p_state->rotation_end, p_frame->p_state->rotation_end);
 
-                summary.ego_orientation = AngularDistance(summary.state_frame->rotation_begin, summary.state_frame->rotation);
+                summary.ego_orientation = AngularDistance(summary.state_frame->rotation_middle, summary.state_frame->rotation_end);
 
             }
 
             // 当前帧的位姿跨度
-            summary.relative_distance = (p_frame->p_state->translation - p_frame->p_state->translation_begin).norm();
+            summary.relative_distance = (p_frame->p_state->translation_end - p_frame->p_state->translation_middle).norm();
 
             // 鲁棒性的验证
             good_enough_registration = assessRegistration(p_frame, summary);
@@ -1009,11 +899,11 @@ estimationSummary lioOptimization::poseEstimation(cloudFrame *p_frame)
             {
                 if(options.robust_registration && summary.number_of_attempts < options.robust_num_attempts)
                 {
-                    double trans_distance = (previous_state->translation_begin - summary.state_frame->translation_begin).norm()
-                                          + (previous_state->translation - summary.state_frame->translation).norm();
+                    double trans_distance = (previous_state->translation_middle - summary.state_frame->translation_middle).norm()
+                                          + (previous_state->translation_end - summary.state_frame->translation_end).norm();
 
-                    double rot_distance = ((previous_state->rotation_begin * summary.state_frame->rotation_begin.inverse()).toRotationMatrix() - Eigen::Matrix3d::Identity()).norm() 
-                                        + ((previous_state->rotation * summary.state_frame->rotation.inverse()).toRotationMatrix() - Eigen::Matrix3d::Identity()).norm();
+                    double rot_distance = ((previous_state->rotation_middle * summary.state_frame->rotation_middle.inverse()).toRotationMatrix() - Eigen::Matrix3d::Identity()).norm()
+                                        + ((previous_state->rotation_end * summary.state_frame->rotation_end.inverse()).toRotationMatrix() - Eigen::Matrix3d::Identity()).norm();
 
                     //increaseRobustnessLevel();
                     summary.robust_level++;
@@ -1078,7 +968,7 @@ estimationSummary lioOptimization::poseEstimation(cloudFrame *p_frame)
         addPointsToMap(voxel_map, p_frame, kSizeVoxelMap, kMaxNumPointsInVoxel, kMinDistancePoints);
 
     const double kMaxDistance = options.max_distance;
-    const Eigen::Vector3d location = p_frame->p_state->translation;
+    const Eigen::Vector3d location = p_frame->p_state->translation_end;
 
     // 去除较远的异常点
     removePointsFarFromLocation(voxel_map, location, kMaxDistance);
@@ -1089,15 +979,15 @@ estimationSummary lioOptimization::poseEstimation(cloudFrame *p_frame)
     summary.corrected_points = p_frame->point_frame;
     summary.all_corrected_points = p_frame->const_frame;
 
-    Eigen::Quaterniond q_begin = summary.state_frame->rotation_begin;
-    Eigen::Quaterniond q_end = summary.state_frame->rotation;
+    Eigen::Quaterniond q_begin = summary.state_frame->rotation_middle;
+    Eigen::Quaterniond q_end = summary.state_frame->rotation_end;
 
     for (auto &point_temp: summary.all_corrected_points)
     {
         double alpha_time = point_temp.alpha_time;
         Eigen::Quaterniond slerp = q_begin.slerp(alpha_time, q_end).normalized();
         point_temp.point = slerp.toRotationMatrix() * point_temp.raw_point +
-                     summary.state_frame->translation_begin * (1.0 - alpha_time) + alpha_time * summary.state_frame->translation;
+                           summary.state_frame->translation_middle * (1.0 - alpha_time) + alpha_time * summary.state_frame->translation_end;
     }
 
     return summary;
@@ -1131,13 +1021,13 @@ void lioOptimization::stateEstimation(std::vector<std::vector<point3D>> &v_cut_s
     }
 
     std::cout << "after solution: " << std::endl;
-    std::cout << "rotation_begin: " << p_frame->p_state->rotation_begin.x() << " " << p_frame->p_state->rotation_begin.y() << " " 
-              << p_frame->p_state->rotation_begin.z() << " " << p_frame->p_state->rotation_begin.w() << std::endl;
-    std::cout << "translation_begin: " << p_frame->p_state->translation_begin.x() << " " << p_frame->p_state->translation_begin.y() << " " << p_frame->p_state->translation_begin.z() << std::endl;
+    std::cout << "rotation_middle: " << p_frame->p_state->rotation_middle.x() << " " << p_frame->p_state->rotation_middle.y() << " "
+              << p_frame->p_state->rotation_middle.z() << " " << p_frame->p_state->rotation_middle.w() << std::endl;
+    std::cout << "translation_middle: " << p_frame->p_state->translation_middle.x() << " " << p_frame->p_state->translation_middle.y() << " " << p_frame->p_state->translation_middle.z() << std::endl;
 
-    std::cout << "rotation_end: " << p_frame->p_state->rotation.x() << " " << p_frame->p_state->rotation.y() << " " 
-              << p_frame->p_state->rotation.z() << " " << p_frame->p_state->rotation.w() << std::endl;
-    std::cout << "translation_end: " << p_frame->p_state->translation.x() << " " << p_frame->p_state->translation.y() << " " << p_frame->p_state->translation.z() << std::endl;
+    std::cout << "rotation_end: " << p_frame->p_state->rotation_end.x() << " " << p_frame->p_state->rotation_end.y() << " "
+              << p_frame->p_state->rotation_end.z() << " " << p_frame->p_state->rotation_end.w() << std::endl;
+    std::cout << "translation_end: " << p_frame->p_state->translation_end.x() << " " << p_frame->p_state->translation_end.y() << " " << p_frame->p_state->translation_end.z() << std::endl;
 
     imu_pro->last_state = imu_pro->current_state;
     imu_pro->current_state = new state(imu_pro->last_state, false);
@@ -1196,8 +1086,8 @@ void lioOptimization::recordSinglePose(cloudFrame *p_frame)
     foutC.precision(6);
 
     foutC << std::fixed << p_frame->time_sweep_end << " ";
-    foutC << p_frame->p_state->translation.x() << " " << p_frame->p_state->translation.y() << " " << p_frame->p_state->translation.z() << " ";
-    foutC << p_frame->p_state->rotation.x() << " " << p_frame->p_state->rotation.y() << " " << p_frame->p_state->rotation.z() << " " << p_frame->p_state->rotation.w();
+    foutC << p_frame->p_state->translation_end.x() << " " << p_frame->p_state->translation_end.y() << " " << p_frame->p_state->translation_end.z() << " ";
+    foutC << p_frame->p_state->rotation_end.x() << " " << p_frame->p_state->rotation_end.y() << " " << p_frame->p_state->rotation_end.z() << " " << p_frame->p_state->rotation_end.w();
     foutC << std::endl; 
 
     foutC.close();
@@ -1205,14 +1095,14 @@ void lioOptimization::recordSinglePose(cloudFrame *p_frame)
 
 void lioOptimization::set_posestamp(geometry_msgs::PoseStamped &body_pose_out,cloudFrame *p_frame)
 {
-    body_pose_out.pose.position.x = p_frame->p_state->translation.x();
-    body_pose_out.pose.position.y = p_frame->p_state->translation.y();
-    body_pose_out.pose.position.z = p_frame->p_state->translation.z();
+    body_pose_out.pose.position.x = p_frame->p_state->translation_end.x();
+    body_pose_out.pose.position.y = p_frame->p_state->translation_end.y();
+    body_pose_out.pose.position.z = p_frame->p_state->translation_end.z();
     
-    body_pose_out.pose.orientation.x = p_frame->p_state->rotation.x();
-    body_pose_out.pose.orientation.y = p_frame->p_state->rotation.y();
-    body_pose_out.pose.orientation.z = p_frame->p_state->rotation.z();
-    body_pose_out.pose.orientation.w = p_frame->p_state->rotation.w();
+    body_pose_out.pose.orientation.x = p_frame->p_state->rotation_end.x();
+    body_pose_out.pose.orientation.y = p_frame->p_state->rotation_end.y();
+    body_pose_out.pose.orientation.z = p_frame->p_state->rotation_end.z();
+    body_pose_out.pose.orientation.w = p_frame->p_state->rotation_end.w();
 }
 
 void lioOptimization::publish_path(ros::Publisher pub_path,cloudFrame *p_frame)
@@ -1246,14 +1136,14 @@ void lioOptimization::addPointToPcl(pcl::PointCloud<pcl::PointXYZI>::Ptr pcl_poi
     cloudTemp.x = point.x();
     cloudTemp.y = point.y();
     cloudTemp.z = point.z();
-    cloudTemp.intensity = 50*(point.z()- p_frame->p_state->translation.z());
+    cloudTemp.intensity = 50*(point.z()- p_frame->p_state->translation_end.z());
     pcl_points->points.push_back(cloudTemp);
 }
 
 
 void lioOptimization::publish_odometry(const ros::Publisher & pubOdomAftMapped, cloudFrame *p_frame)
 {
-    geometry_msgs::Quaternion geoQuat = tf::createQuaternionMsgFromRollPitchYaw(p_frame->p_state->rotation.z(), -p_frame->p_state->rotation.x(), -p_frame->p_state->rotation.y());
+    geometry_msgs::Quaternion geoQuat = tf::createQuaternionMsgFromRollPitchYaw(p_frame->p_state->rotation_end.z(), -p_frame->p_state->rotation_end.x(), -p_frame->p_state->rotation_end.y());
 
     odomAftMapped.header.frame_id = "camera_init";
     odomAftMapped.child_frame_id = "body";
@@ -1262,16 +1152,16 @@ void lioOptimization::publish_odometry(const ros::Publisher & pubOdomAftMapped, 
     odomAftMapped.pose.pose.orientation.y = -geoQuat.z;
     odomAftMapped.pose.pose.orientation.z = geoQuat.x;
     odomAftMapped.pose.pose.orientation.w = geoQuat.w;
-    odomAftMapped.pose.pose.position.x = p_frame->p_state->translation.x();
-    odomAftMapped.pose.pose.position.y = p_frame->p_state->translation.y();
-    odomAftMapped.pose.pose.position.z = p_frame->p_state->translation.z();
+    odomAftMapped.pose.pose.position.x = p_frame->p_state->translation_end.x();
+    odomAftMapped.pose.pose.position.y = p_frame->p_state->translation_end.y();
+    odomAftMapped.pose.pose.position.z = p_frame->p_state->translation_end.z();
     pubOdomAftMapped.publish(odomAftMapped);
 
     laserOdometryTrans.frame_id_ = "/camera_init";
     laserOdometryTrans.child_frame_id_ = "/laser_odom";
     laserOdometryTrans.stamp_ = ros::Time().fromSec(p_frame->time_sweep_end);;
     laserOdometryTrans.setRotation(tf::Quaternion(-geoQuat.y, -geoQuat.z, geoQuat.x, geoQuat.w));
-    laserOdometryTrans.setOrigin(tf::Vector3(p_frame->p_state->translation.x(), p_frame->p_state->translation.y(), p_frame->p_state->translation.z()));
+    laserOdometryTrans.setOrigin(tf::Vector3(p_frame->p_state->translation_end.x(), p_frame->p_state->translation_end.y(), p_frame->p_state->translation_end.z()));
     tfBroadcaster.sendTransform(laserOdometryTrans);
 }
 
@@ -1279,8 +1169,6 @@ void lioOptimization::run()
 {
     // 获得观测信息 IMU Lidar
     std::vector<std::pair<std::pair<std::vector<sensor_msgs::ImuConstPtr>, std::vector<std::vector<point3D>>>, std::pair<double, double>>> measurements = getMeasurements();
-
-
 
     // 观测数据类型
     //  vector
@@ -1299,59 +1187,6 @@ void lioOptimization::run()
         auto v_cut_sweep = measurement.first.second;
         // 点云的结束时间
         double time_frame = measurement.second.first + measurement.second.second;
-        double dx = 0, dy = 0, dz = 0, rx = 0, ry = 0, rz = 0;
-
-        /*for (auto &imu_msg : measurement.first.first)
-        {
-            double time_imu = imu_msg->header.stamp.toSec();
-            if (time_imu <= time_frame)
-            {
-                // 在当前帧结束之前的IMU信息
-                // 初始化时current_time = -1
-                // current_time = 当前帧的开始时间
-                if(current_time < 0)
-                    current_time = measurement.second.first;
-                double dt = time_imu - current_time;
-
-                if(dt < -1e-6) continue;
-                assert(dt >= 0);
-                // current_time = IMU消息头的时间
-                current_time = time_imu;
-                dx = imu_msg->linear_acceleration.x;
-                dy = imu_msg->linear_acceleration.y;
-                dz = imu_msg->linear_acceleration.z;
-                rx = imu_msg->angular_velocity.x;
-                ry = imu_msg->angular_velocity.y;
-                rz = imu_msg->angular_velocity.z;
-                // TODO IMU
-                imu_pro->process(dt, Eigen::Vector3d(dx, dy, dz), Eigen::Vector3d(rx, ry, rz), time_imu);
-
-                if (options.optimize_options.solver == LIO && !initial_flag)
-                {
-                    v_acc_static.push_back(Eigen::Vector3d(dx, dy, dz));
-                    v_gyr_static.push_back(Eigen::Vector3d(rx, ry, rz));
-                }
-            }
-            else
-            {
-                double dt_1 = time_frame - current_time;
-                double dt_2 = time_imu - time_frame;
-                current_time = time_frame;
-                assert(dt_1 >= 0);
-                assert(dt_2 >= 0);
-                assert(dt_1 + dt_2 > 0);
-                double w1 = dt_2 / (dt_1 + dt_2);
-                double w2 = dt_1 / (dt_1 + dt_2);
-                dx = w1 * dx + w2 * imu_msg->linear_acceleration.x;
-                dy = w1 * dy + w2 * imu_msg->linear_acceleration.y;
-                dz = w1 * dz + w2 * imu_msg->linear_acceleration.z;
-                rx = w1 * rx + w2 * imu_msg->angular_velocity.x;
-                ry = w1 * ry + w2 * imu_msg->angular_velocity.y;
-                rz = w1 * rz + w2 * imu_msg->angular_velocity.z;
-                imu_pro->process(dt_1, Eigen::Vector3d(dx, dy, dz), Eigen::Vector3d(rx, ry, rz), time_frame);
-            }
-        }*/
-
         // 输入当前帧点云 点云起始时间和点云的持续时间
         stateEstimation(v_cut_sweep, measurement.second.first, measurement.second.second);
         

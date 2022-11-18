@@ -203,6 +203,10 @@ void distortFrame(std::vector<point3D> &points, Eigen::Quaterniond &q_begin, Eig
 
 void transformPoint(MotionCompensation compensation, point3D &point_temp, Eigen::Quaterniond &q_begin, Eigen::Quaterniond &q_end, Eigen::Vector3d &t_begin, Eigen::Vector3d &t_end, Eigen::Matrix3d &R_imu_lidar, Eigen::Vector3d &t_imu_lidar);
 
+// 修改后的获得点云的预测世界坐标
+void transformPoint(MotionCompensation compensation, point3D &point_temp, Eigen::Quaterniond &q_last_end, Eigen::Quaterniond &q_middle, Eigen::Quaterniond &q_end,
+                    Eigen::Vector3d &t_last_end, Eigen::Vector3d &t_middle, Eigen::Vector3d &t_end, Eigen::Matrix3d &R_imu_lidar, Eigen::Vector3d &t_imu_lidar);
+
 namespace std {
     template <typename T, typename... Args>
         std::unique_ptr<T> make_unique(Args&&... args) {

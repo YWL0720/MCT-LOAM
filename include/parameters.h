@@ -31,7 +31,7 @@ public:
 
     double max_dist_to_plane_icp = 0.3; // The maximum distance point-to-plane (OLD Version of ICP)
 
-    double threshold_orientation_norm = 0.0001; // Threshold on rotation (deg) for ICP's stopping criterion
+    double threshold_orientation_norm = 0.0001; // Threshold on rotation_end (deg) for ICP's stopping criterion
 
     double threshold_translation_norm = 0.001; // Threshold on translation (deg) for ICP's stopping criterion
 
