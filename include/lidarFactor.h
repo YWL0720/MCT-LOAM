@@ -4,7 +4,7 @@
 
 // eigen 
 #include <Eigen/Core>
-
+#include <unsupported/Eigen/Splines>
 // ceres
 #include <ceres/ceres.h>
 
@@ -445,6 +445,25 @@ struct MCTLidarPlaneNormFactorAutoDiff
     double norm_offset, alpha_time, weight;
 };
 
+
+
+class Spline3D
+{
+public:
+    Spline3D(Eigen::VectorXd vTime, Eigen::Matrix<double, Eigen::Dynamic, 3> vPoints)
+    {
+        spline_ = Eigen::SplineFitting<Eigen::Spline<double, 3>>::Interpolate(vPoints.transpose(), 2, vTime.transpose());
+    };
+    Eigen::Vector3d operator()(double x)
+    {
+        x = x > 1.0 ? 1.0 : x < 0.0 ? 0.0 : x;
+        return Eigen::Vector3d(spline_(x)(0), spline_(x)(1), spline_(x)(2));
+    }
+private:
+    Eigen::Spline<double, 3> spline_;
+};
+
+
 struct MCTLidarPlaneNormFactorFirstAutoDiff
 {
     MCTLidarPlaneNormFactorFirstAutoDiff(const Eigen::Vector3d &raw_keypoint_, const Eigen::Quaterniond rot_last_end_, const Eigen::Vector3d tran_last_end_,
@@ -504,7 +523,7 @@ struct MCTLidarPlaneNormFactorFirstAutoDiff
 struct MCTLidarPlaneNormFactorSecondAutoDiff
 {
     MCTLidarPlaneNormFactorSecondAutoDiff(const Eigen::Vector3d &raw_keypoint_, const Eigen::Quaterniond rot_last_end_, const Eigen::Vector3d tran_last_end_,
-                                    const Eigen::Vector3d &norm_vector_, const double norm_offset_, double alpha_time_, double weight_)
+                                          const Eigen::Vector3d &norm_vector_, const double norm_offset_, double alpha_time_, double weight_)
             : raw_keypoint_d(raw_keypoint_), rot_last_end(rot_last_end_), tran_last_end(tran_last_end_), norm_vector(norm_vector_),
               norm_offset(norm_offset_), alpha_time(alpha_time_), weight(weight_)
     {
@@ -556,3 +575,184 @@ struct MCTLidarPlaneNormFactorSecondAutoDiff
     Eigen::Vector3d norm_vector;
     double norm_offset, alpha_time, weight;
 };
+
+
+/*!
+ * @brief MCT约束自动求导方法 只需添加这一段约束 适用于所有点
+ *
+ */
+struct MCTLidarPlaneNormFactorAD
+{
+    MCTLidarPlaneNormFactorAD(const Eigen::Vector3d &raw_keypoint_, const Eigen::Quaterniond rot_last_end_, const Eigen::Vector3d tran_last_end_,
+                                          const Eigen::Vector3d &norm_vector_, const double norm_offset_, double alpha_time_, double weight_)
+            : raw_keypoint_d(raw_keypoint_), rot_last_end(rot_last_end_), tran_last_end(tran_last_end_), norm_vector(norm_vector_),
+              norm_offset(norm_offset_), alpha_time(alpha_time_), weight(weight_)
+    {
+        raw_keypoint_d = CTLidarPlaneNormFactor::q_il * raw_keypoint_ + CTLidarPlaneNormFactor::t_il;
+    };
+
+    template <typename T>
+    bool operator()(const T* parameters_middle_t, const T* parameters_middle_q, const T* parameters_end_t, const T* parameters_end_q, T* residual) const
+    {
+        // 优化变量 中间时刻的状态和结束时刻的状态
+        Eigen::Matrix<T, 3, 1> tran_middle{parameters_middle_t[0], parameters_middle_t[1], parameters_middle_t[2]};
+        Eigen::Matrix<T, 3, 1> tran_end{parameters_end_t[0], parameters_end_t[1], parameters_end_t[2]};
+        Eigen::Quaternion<T> rot_middle{parameters_middle_q[3], parameters_middle_q[0], parameters_middle_q[1], parameters_middle_q[2]};
+        Eigen::Quaternion<T> rot_end{parameters_end_q[3], parameters_end_q[0], parameters_end_q[1], parameters_end_q[2]};
+        // 原始数据点和相关的计算量
+        Eigen::Matrix<T, 3, 1> raw_keypoint{T(raw_keypoint_d.x()), T(raw_keypoint_d.y()), T(raw_keypoint_d.z())};
+        Eigen::Matrix<T, 3, 1> norm_vector_T{T(norm_vector.x()), T(norm_vector.y()), T(norm_vector.z())};
+        // 上一帧结束时刻的位姿 固定
+        Eigen::Quaternion<T> rot_last_end_T{T(rot_last_end.w()), T(rot_last_end.x()), T(rot_last_end.y()), T(rot_last_end.z())};
+        Eigen::Matrix<T, 3, 1> tran_last_end_T{T(tran_last_end.x()), T(tran_last_end.y()), T(tran_last_end.z())};
+
+        // 旋转插值
+        Eigen::Quaternion<T> rot_squad;
+        Eigen::Quaternion<T> rot_tmp_1;
+        Eigen::Quaternion<T> rot_tmp_2;
+
+        Eigen::Matrix<T, 3, 1> tran_squad;
+
+//        rot_tmp_1 = rot_last_end_T.slerp(T(alpha_time), rot_end);
+//        rot_tmp_2 = rot_middle.slerp(T(alpha_time * 2 - 1), rot_end);
+//        rot_squad = rot_tmp_1.slerp(T(2*alpha_time*(2-alpha_time * 2)), rot_tmp_2);
+//        rot_squad.normalize();
+
+        rot_tmp_1 = rot_last_end_T.slerp(T(alpha_time * 2), rot_middle);
+        rot_tmp_2 = rot_middle.slerp(T(2 * alpha_time - 1), rot_end);
+
+        // 平移插值
+        Eigen::Matrix<T, 3, 1> tran_tmp_1;
+        Eigen::Matrix<T, 3, 1> tran_tmp_2;
+        Eigen::Matrix<T, 3, 1> tran_tmp_3;
+//        tran_tmp_1 = tran_last_end_T + T(alpha_time * 2) * (tran_middle - tran_last_end_T);
+//        tran_tmp_2 = tran_middle + T(alpha_time * 2 - 1) * (tran_end - tran_middle);
+//        tran_squad = tran_tmp_1 + T(4*alpha_time*(2-alpha_time * 2))*(tran_tmp_2-tran_tmp_1);
+//        Eigen::Matrix<T, 3, 1> point_world = rot_squad * raw_keypoint + tran_squad;
+
+        tran_tmp_1 = tran_last_end_T + T(2 * alpha_time) * (tran_middle - tran_last_end_T);
+        tran_tmp_2 = tran_middle + T(2 * alpha_time - 1) * (tran_end - tran_middle);
+        // Eigen::Matrix<T, 3, 1> point_world = rot_squad * raw_keypoint + tran_squad;
+//        T distance = norm_vector_T.dot(point_world) + T(norm_offset);
+
+        Eigen::Matrix<T, 3, 1> point_world_1 = rot_tmp_1 * raw_keypoint + tran_tmp_1;
+        Eigen::Matrix<T, 3, 1> point_world_2 = rot_tmp_2 * raw_keypoint + tran_tmp_2;
+
+        T distance_1 = norm_vector_T.dot(point_world_1) + T(norm_offset);
+        T distance_2 = norm_vector_T.dot(point_world_2) + T(norm_offset);
+        residual[0] = T(CTLidarPlaneNormFactor::sqrt_info) * T(weight) * T(distance_1);
+        residual[1] = T(CTLidarPlaneNormFactor::sqrt_info) * T(weight) * T(distance_2);
+
+        return true;
+    }
+
+    static ceres::CostFunction* Create(const Eigen::Vector3d &raw_keypoint_, const Eigen::Quaterniond rot_last_end_, const Eigen::Vector3d tran_last_end_,
+                                       const Eigen::Vector3d &norm_vector_, const double norm_offset_, double alpha_time_, double weight_)
+    {
+        return new ceres::AutoDiffCostFunction<MCTLidarPlaneNormFactorAD, 2, 3, 4, 3, 4>(new MCTLidarPlaneNormFactorAD(
+                raw_keypoint_, rot_last_end_, tran_last_end_, norm_vector_, norm_offset_, alpha_time_, weight_
+        ));
+    }
+
+
+    Eigen::Vector3d raw_keypoint_d;
+    Eigen::Quaterniond rot_last_end;
+    Eigen::Vector3d tran_last_end;
+    Eigen::Vector3d norm_vector;
+    double norm_offset, alpha_time, weight;
+};
+
+/*!
+ * @brief MCT约束数值求导方法 只需添加这一段约束 适用于所有点
+ *
+ */
+struct MCTLidarPlaneNormFactorND
+{
+    MCTLidarPlaneNormFactorND(const Eigen::Vector3d &raw_keypoint_, const Eigen::Quaterniond rot_last_end_, const Eigen::Vector3d tran_last_end_,
+                              const Eigen::Vector3d &norm_vector_, const double norm_offset_, double alpha_time_, double weight_)
+            : raw_keypoint(raw_keypoint_), rot_last_end(rot_last_end_), tran_last_end(tran_last_end_), norm_vector(norm_vector_),
+              norm_offset(norm_offset_), alpha_time(alpha_time_), weight(weight_)
+    {
+        raw_keypoint = CTLidarPlaneNormFactor::q_il * raw_keypoint_ + CTLidarPlaneNormFactor::t_il;
+    };
+
+    bool operator()(const double* const parameters_middle_t, const double* const parameters_middle_q,
+                    const double* const parameters_end_t,    const double* const parameters_end_q,    double* residual) const
+    {
+        // 优化变量 中间时刻的状态和结束时刻的状态
+        Eigen::Vector3d tran_middle{parameters_middle_t[0], parameters_middle_t[1], parameters_middle_t[2]};
+        Eigen::Vector3d tran_end{parameters_end_t[0], parameters_end_t[1], parameters_end_t[2]};
+        Eigen::Quaterniond rot_middle{parameters_middle_q[3], parameters_middle_q[0], parameters_middle_q[1], parameters_middle_q[2]};
+        Eigen::Quaterniond rot_end{parameters_end_q[3], parameters_end_q[0], parameters_end_q[1], parameters_end_q[2]};
+
+        // 旋转插值
+        Eigen::Quaterniond rot_squad;
+        Eigen::Quaterniond rot_tmp_1;
+        Eigen::Quaterniond rot_tmp_2;
+
+        rot_tmp_1 = rot_last_end.slerp(alpha_time, rot_end);
+        rot_tmp_2 = rot_middle.slerp(alpha_time * 2 - 1, rot_end);
+
+        rot_squad = rot_tmp_1.slerp(2*alpha_time*(2-alpha_time * 2), rot_tmp_2);
+        rot_squad.normalize();
+        // 平移插值
+        Eigen::Vector3d tran_squad;
+        /**********************************************************************/
+        // Eigen样条插值
+
+        Eigen::VectorXd vTimes(3);
+        vTimes << 0.0, 0.5, 1.0;
+
+        Eigen::Matrix<double, Eigen::Dynamic, 3> vPoints(3, 3);
+        vPoints << tran_last_end.x(), tran_middle.x(), tran_end.z(),
+                tran_last_end.y(), tran_middle.y(), tran_end.y(),
+                tran_last_end.z(), tran_middle.z(), tran_end.z();
+
+        Spline3D s(vTimes, vPoints);
+
+        tran_squad = s(alpha_time);
+
+//        Eigen::Vector3d tran_tmp_1;
+//        Eigen::Vector3d tran_tmp_2;
+//        Eigen::Vector3d tran_tmp_3;
+//        tran_tmp_1 = tran_last_end + (alpha_time * 2) * (tran_middle - tran_last_end);
+//        tran_tmp_2 = tran_middle + (alpha_time * 2 - 1) * (tran_end - tran_middle);
+//
+//        tran_squad = tran_tmp_1 + (4*alpha_time*(2-alpha_time * 2))*(tran_tmp_2-tran_tmp_1);
+
+        /**********************************************************************/
+
+//        if (alpha_time >= 0.724 && alpha_time <= 0.73)
+//        {
+//            std::cout << "=========================================" << std::endl;
+//            std::cout << "tran_last_end = " << tran_last_end.transpose() << std::endl;
+//            std::cout << "tran_middle = " << tran_middle.transpose() << std::endl;
+//            std::cout << "tran_end = " << tran_end.transpose() << std::endl;
+//            std::cout << "alpha_time = " << alpha_time << std::endl;
+//            std::cout << "tran_squad = " << tran_squad.transpose() << std::endl;
+//        }
+
+        Eigen::Vector3d point_world = rot_squad * raw_keypoint + tran_squad;
+        double distance = norm_vector.dot(point_world) + norm_offset;
+
+        residual[0] = CTLidarPlaneNormFactor::sqrt_info * weight * distance;
+
+        return true;
+    }
+
+    static ceres::CostFunction* Create(const Eigen::Vector3d &raw_keypoint_, const Eigen::Quaterniond rot_last_end_, const Eigen::Vector3d tran_last_end_,
+                                       const Eigen::Vector3d &norm_vector_, const double norm_offset_, double alpha_time_, double weight_)
+    {
+        return new ceres::NumericDiffCostFunction<MCTLidarPlaneNormFactorND, ceres::CENTRAL, 1, 3, 4, 3, 4>(new MCTLidarPlaneNormFactorND(
+                raw_keypoint_, rot_last_end_, tran_last_end_, norm_vector_, norm_offset_, alpha_time_, weight_
+        ));
+    }
+
+
+    Eigen::Vector3d raw_keypoint;
+    Eigen::Quaterniond rot_last_end;
+    Eigen::Vector3d tran_last_end;
+    Eigen::Vector3d norm_vector;
+    double norm_offset, alpha_time, weight;
+};
+

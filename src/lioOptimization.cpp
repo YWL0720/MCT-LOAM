@@ -874,6 +874,7 @@ estimationSummary lioOptimization::poseEstimation(cloudFrame *p_frame)
             optimize(p_frame, optimize_options, summary, sample_voxel_size);
             auto end_ct_icp = std::chrono::steady_clock::now();
             std::chrono::duration<double> elapsed_icp = (end_ct_icp - start);
+            //std::cout << "Once optimization cost " << elapsed_icp.count() << " s" << std::endl;
 
             // 计算当前帧本次优化后的初始位置与上一帧结束位置之间的距离
             if(p_frame->frame_id > sweep_cut_num)
@@ -1009,7 +1010,11 @@ void lioOptimization::stateEstimation(std::vector<std::vector<point3D>> &v_cut_s
     cloudFrame *p_frame = buildFrame(const_frame, imu_pro->current_state, timestamp_begin, timestamp_offset);
 
     // 位姿估计
+    auto start = std::chrono::steady_clock::now();
     estimationSummary summary = poseEstimation(p_frame);
+    auto end = std::chrono::steady_clock::now();
+    std::chrono::duration<double> opt_time = (end - start);
+    std::cout << "Once optimization cost " << opt_time.count() << " s" << std::endl;
     summary.release();
 
     if (options.optimize_options.solver == LIO && !initial_flag)
@@ -1020,14 +1025,14 @@ void lioOptimization::stateEstimation(std::vector<std::vector<point3D>> &v_cut_s
             staticInitialization(p_frame);
     }
 
-    std::cout << "after solution: " << std::endl;
-    std::cout << "rotation_middle: " << p_frame->p_state->rotation_middle.x() << " " << p_frame->p_state->rotation_middle.y() << " "
-              << p_frame->p_state->rotation_middle.z() << " " << p_frame->p_state->rotation_middle.w() << std::endl;
-    std::cout << "translation_middle: " << p_frame->p_state->translation_middle.x() << " " << p_frame->p_state->translation_middle.y() << " " << p_frame->p_state->translation_middle.z() << std::endl;
-
-    std::cout << "rotation_end: " << p_frame->p_state->rotation_end.x() << " " << p_frame->p_state->rotation_end.y() << " "
-              << p_frame->p_state->rotation_end.z() << " " << p_frame->p_state->rotation_end.w() << std::endl;
-    std::cout << "translation_end: " << p_frame->p_state->translation_end.x() << " " << p_frame->p_state->translation_end.y() << " " << p_frame->p_state->translation_end.z() << std::endl;
+//    std::cout << "after solution: " << std::endl;
+//    std::cout << "rotation_middle: " << p_frame->p_state->rotation_middle.x() << " " << p_frame->p_state->rotation_middle.y() << " "
+//              << p_frame->p_state->rotation_middle.z() << " " << p_frame->p_state->rotation_middle.w() << std::endl;
+//    std::cout << "translation_middle: " << p_frame->p_state->translation_middle.x() << " " << p_frame->p_state->translation_middle.y() << " " << p_frame->p_state->translation_middle.z() << std::endl;
+//
+//    std::cout << "rotation_end: " << p_frame->p_state->rotation_end.x() << " " << p_frame->p_state->rotation_end.y() << " "
+//              << p_frame->p_state->rotation_end.z() << " " << p_frame->p_state->rotation_end.w() << std::endl;
+//    std::cout << "translation_end: " << p_frame->p_state->translation_end.x() << " " << p_frame->p_state->translation_end.y() << " " << p_frame->p_state->translation_end.z() << std::endl;
 
     imu_pro->last_state = imu_pro->current_state;
     imu_pro->current_state = new state(imu_pro->last_state, false);
@@ -1143,7 +1148,7 @@ void lioOptimization::addPointToPcl(pcl::PointCloud<pcl::PointXYZI>::Ptr pcl_poi
 
 void lioOptimization::publish_odometry(const ros::Publisher & pubOdomAftMapped, cloudFrame *p_frame)
 {
-    geometry_msgs::Quaternion geoQuat = tf::createQuaternionMsgFromRollPitchYaw(p_frame->p_state->rotation_end.z(), -p_frame->p_state->rotation_end.x(), -p_frame->p_state->rotation_end.y());
+    geometry_msgs::Quaternion geoQuat = tf::createQuaternionMsgFromRollPitchYaw(p_frame->p_state->rotation_middle.z(), -p_frame->p_state->rotation_middle.x(), -p_frame->p_state->rotation_middle.y());
 
     odomAftMapped.header.frame_id = "camera_init";
     odomAftMapped.child_frame_id = "body";
@@ -1152,16 +1157,16 @@ void lioOptimization::publish_odometry(const ros::Publisher & pubOdomAftMapped, 
     odomAftMapped.pose.pose.orientation.y = -geoQuat.z;
     odomAftMapped.pose.pose.orientation.z = geoQuat.x;
     odomAftMapped.pose.pose.orientation.w = geoQuat.w;
-    odomAftMapped.pose.pose.position.x = p_frame->p_state->translation_end.x();
-    odomAftMapped.pose.pose.position.y = p_frame->p_state->translation_end.y();
-    odomAftMapped.pose.pose.position.z = p_frame->p_state->translation_end.z();
+    odomAftMapped.pose.pose.position.x = p_frame->p_state->translation_middle.x();
+    odomAftMapped.pose.pose.position.y = p_frame->p_state->translation_middle.y();
+    odomAftMapped.pose.pose.position.z = p_frame->p_state->translation_middle.z();
     pubOdomAftMapped.publish(odomAftMapped);
 
     laserOdometryTrans.frame_id_ = "/camera_init";
     laserOdometryTrans.child_frame_id_ = "/laser_odom";
     laserOdometryTrans.stamp_ = ros::Time().fromSec(p_frame->time_sweep_end);;
     laserOdometryTrans.setRotation(tf::Quaternion(-geoQuat.y, -geoQuat.z, geoQuat.x, geoQuat.w));
-    laserOdometryTrans.setOrigin(tf::Vector3(p_frame->p_state->translation_end.x(), p_frame->p_state->translation_end.y(), p_frame->p_state->translation_end.z()));
+    laserOdometryTrans.setOrigin(tf::Vector3(p_frame->p_state->translation_middle.x(), p_frame->p_state->translation_middle.y(), p_frame->p_state->translation_middle.z()));
     tfBroadcaster.sendTransform(laserOdometryTrans);
 }
 

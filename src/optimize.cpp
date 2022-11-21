@@ -198,34 +198,30 @@ optimizeSummary lioOptimization::optimizeByAnalyticLidar(const icpOptions &cur_i
                     norm_vector.normalize();
                     double norm_offset = - norm_vector.dot(vector_neighbors[i]);
 
+                    // (1) 对每个点分别加两段约束 分开写
+                    /***********************************************************************/
+//                    ceres::CostFunction* cost_function_1 = MCTLidarPlaneNormFactorFirstAutoDiff::Create(keypoints[k].raw_point, current_state->rotation_last_end, current_state->translation_last_end,
+//                                                                                                      norm_vector, norm_offset, keypoints[k].alpha_time, weight);
+//                    problem.AddResidualBlock(cost_function_1, loss_function, &middle_t.x(), &middle_quat.x());
+//
+//                    ceres::CostFunction* cost_function_2 = MCTLidarPlaneNormFactorSecondAutoDiff::Create(keypoints[k].raw_point, current_state->rotation_last_end, current_state->translation_last_end,
+//                                                                                                       norm_vector, norm_offset, keypoints[k].alpha_time, weight);
+//                    problem.AddResidualBlock(cost_function_2, loss_function, &middle_t.x(), &middle_quat.x(), &end_t.x(), &end_quat.x());
+                    /***********************************************************************/
 
-                    // 这里使用了原始的点
-                    //CTLidarPlaneNormFactor *cost_function = new CTLidarPlaneNormFactor(keypoints[k].raw_point, norm_vector, norm_offset, keypoints[k].alpha_time, weight);
-
-                    //ceres::CostFunction* cost_function = CTLidarPlaneNormFactorAutoDiff::Create(keypoints[k].raw_point, norm_vector, norm_offset, keypoints[k].alpha_time, weight);
-
-                    ceres::CostFunction* cost_function1 = MCTLidarPlaneNormFactorFirstAutoDiff::Create(keypoints[k].raw_point, current_state->rotation_last_end, current_state->translation_last_end,
-                                                                                                      norm_vector, norm_offset, keypoints[k].alpha_time, weight);
-                    problem.AddResidualBlock(cost_function1, loss_function, &middle_t.x(), &middle_quat.x());
-
-                    ceres::CostFunction* cost_function2 = MCTLidarPlaneNormFactorSecondAutoDiff::Create(keypoints[k].raw_point, current_state->rotation_last_end, current_state->translation_last_end,
+                    // (2) 对每个点分别加两段约束 写在一起
+                    /***********************************************************************/
+                    ceres::CostFunction* cost_function = MCTLidarPlaneNormFactorAD::Create(keypoints[k].raw_point, current_state->rotation_last_end, current_state->translation_last_end,
                                                                                                        norm_vector, norm_offset, keypoints[k].alpha_time, weight);
-                    problem.AddResidualBlock(cost_function2, loss_function, &middle_t.x(), &middle_quat.x(), &end_t.x(), &end_quat.x());
+                    problem.AddResidualBlock(cost_function, loss_function, &middle_t.x(), &middle_quat.x(), &end_t.x(), &end_quat.x());
+                    /***********************************************************************/
 
-                    /*if (keypoints[k].alpha_time <= 0.5)
-                    {
-                        ceres::CostFunction* cost_function = MCTLidarPlaneNormFactorFirstAutoDiff::Create(keypoints[k].raw_point, current_state->rotation_last_end, current_state->translation_last_end,
-                                                                                                     norm_vector, norm_offset, keypoints[k].alpha_time, weight);
-                        problem.AddResidualBlock(cost_function, loss_function, &middle_t.x(), &middle_quat.x());
-                    }
-                    else if (keypoints[k].alpha_time <= 1.0)
-                    {
-                        ceres::CostFunction* cost_function = MCTLidarPlaneNormFactorSecondAutoDiff::Create(keypoints[k].raw_point, current_state->rotation_last_end, current_state->translation_last_end,
-                                                                                                     norm_vector, norm_offset, keypoints[k].alpha_time, weight);
-                        problem.AddResidualBlock(cost_function, loss_function, &middle_t.x(), &middle_quat.x(), &end_t.x(), &end_quat.x());
-                    }*/
-
-
+                    // (3) TODO 对每个点添加三段样条插值约束 数值求导方法
+                    /***********************************************************************/
+//                    ceres::CostFunction* cost_function = MCTLidarPlaneNormFactorND::Create(keypoints[k].raw_point, current_state->rotation_last_end, current_state->translation_last_end,
+//                                                                                                       norm_vector, norm_offset, keypoints[k].alpha_time, weight);
+//                    problem.AddResidualBlock(cost_function, loss_function, &middle_t.x(), &middle_quat.x(), &end_t.x(), &end_quat.x());
+                    /***********************************************************************/
 
                 }
             }
