@@ -77,8 +77,10 @@ target_link_libraries(lio_optimization ${catkin_LIBRARIES} ${CERES_LIBRARIES} ro
 # tools
 add_executable(trajectory_listener src/tools/mct_listener.cpp)
 add_executable(field_check src/tools/field_check.cpp)
-add_executable(ply2bag src/tools/ply2bag.cpp)
+add_executable(ply2bag_timestamp src/tools/ply2bag_timestamp.cpp)
+add_executable(ply2bag_time src/tools/ply2bag_time.cpp)
 
 target_link_libraries(trajectory_listener ${catkin_LIBRARIES})
 target_link_libraries(field_check ${catkin_LIBRARIES})
-target_link_libraries(ply2bag ${catkin_LIBRARIES})
+target_link_libraries(ply2bag_timestamp ${catkin_LIBRARIES})
+target_link_libraries(ply2bag_time ${catkin_LIBRARIES})

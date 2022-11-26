@@ -179,8 +179,15 @@ void cloudProcessing::velodyneHandler(const sensor_msgs::PointCloud2::ConstPtr &
     // 原始点云数据中的最后一个点的时间大于0 认为是可以按照该时间给出偏移值的
     if (raw_cloud.points[size - 1].time > 0)
      	given_offset_time = true;
+    else {
+        given_offset_time = false;
+        ROS_INFO("time = %f", raw_cloud.points[size - 1].time);
+    }
+
+    if (given_offset_time)
+        ROS_INFO("Have time");
     else
-    	given_offset_time = false;
+        ROS_INFO("Do not have time");
 
     // 如果给定了时间 则按照雷达驱动中发布的时间计算分割的偏移时间
     if(given_offset_time)

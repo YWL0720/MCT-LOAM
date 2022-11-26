@@ -1119,7 +1119,7 @@ void lioOptimization::publish_path(ros::Publisher pub_path,cloudFrame *p_frame)
     msg_body_pose.header.frame_id = "camera_init";
 
     static int i = 0;
-    i++;
+//    i++;
     if (i % 10 == 0)
     {
         path.poses.push_back(msg_body_pose);
