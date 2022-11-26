@@ -1014,7 +1014,7 @@ void lioOptimization::stateEstimation(std::vector<std::vector<point3D>> &v_cut_s
     estimationSummary summary = poseEstimation(p_frame);
     auto end = std::chrono::steady_clock::now();
     std::chrono::duration<double> opt_time = (end - start);
-    std::cout << "Once optimization cost " << opt_time.count() << " s" << std::endl;
+    // std::cout << "Once optimization cost " << opt_time.count() << " s" << std::endl;
     summary.release();
 
     if (options.optimize_options.solver == LIO && !initial_flag)
@@ -1100,25 +1100,27 @@ void lioOptimization::recordSinglePose(cloudFrame *p_frame)
 
 void lioOptimization::set_posestamp(geometry_msgs::PoseStamped &body_pose_out,cloudFrame *p_frame)
 {
-    body_pose_out.pose.position.x = p_frame->p_state->translation_end.x();
-    body_pose_out.pose.position.y = p_frame->p_state->translation_end.y();
-    body_pose_out.pose.position.z = p_frame->p_state->translation_end.z();
+    body_pose_out.pose.position.x = p_frame->p_state->translation_middle.x();
+    body_pose_out.pose.position.y = p_frame->p_state->translation_middle.y();
+    body_pose_out.pose.position.z = p_frame->p_state->translation_middle.z();
     
-    body_pose_out.pose.orientation.x = p_frame->p_state->rotation_end.x();
-    body_pose_out.pose.orientation.y = p_frame->p_state->rotation_end.y();
-    body_pose_out.pose.orientation.z = p_frame->p_state->rotation_end.z();
-    body_pose_out.pose.orientation.w = p_frame->p_state->rotation_end.w();
+    body_pose_out.pose.orientation.x = p_frame->p_state->rotation_middle.x();
+    body_pose_out.pose.orientation.y = p_frame->p_state->rotation_middle.y();
+    body_pose_out.pose.orientation.z = p_frame->p_state->rotation_middle.z();
+    body_pose_out.pose.orientation.w = p_frame->p_state->rotation_middle.w();
 }
 
 void lioOptimization::publish_path(ros::Publisher pub_path,cloudFrame *p_frame)
 {
+    // 修改Path的内容和时间戳 Path将发布中间时刻的位姿 且时间戳为当前帧中间时刻
     set_posestamp(msg_body_pose,p_frame);
-    msg_body_pose.header.stamp = ros::Time().fromSec(p_frame->time_sweep_end);
+    msg_body_pose.header.stamp = ros::Time().fromSec(p_frame->time_sweep_begin + 0.5 * (p_frame->time_sweep_end - p_frame->time_sweep_begin));
+    // msg_body_pose.header.stamp = ros::Time().fromSec(p_frame->time_sweep_end);
     msg_body_pose.header.frame_id = "camera_init";
 
     static int i = 0;
     i++;
-    if (i % 10 == 0) 
+    if (i % 10 == 0)
     {
         path.poses.push_back(msg_body_pose);
         pub_path.publish(path);
@@ -1172,9 +1174,9 @@ void lioOptimization::publish_odometry(const ros::Publisher & pubOdomAftMapped, 
 
 void lioOptimization::run()
 {
+    auto start = std::chrono::steady_clock::now();
     // 获得观测信息 IMU Lidar
     std::vector<std::pair<std::pair<std::vector<sensor_msgs::ImuConstPtr>, std::vector<std::vector<point3D>>>, std::pair<double, double>>> measurements = getMeasurements();
-
     // 观测数据类型
     //  vector
     //      - pair<
@@ -1201,6 +1203,10 @@ void lioOptimization::run()
         for(int i = 0; i < measurement.first.second.size(); i++) std::vector<point3D>().swap(measurement.first.second[i]);
         std::vector<std::vector<point3D>>().swap(measurement.first.second);
     }
+
+    auto end = std::chrono::steady_clock::now();
+    std::chrono::duration<double> opt_time = (end - start);
+    std::cout << "Once optimization cost " << opt_time.count() * 1000 << " ms" << std::endl;
 }
 
 // 系统主入口

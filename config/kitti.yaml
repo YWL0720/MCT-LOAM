@@ -1,16 +1,16 @@
 common:
     lidar_topic:  "/velodyne_points"
-    imu_topic:  "/imu/data11"
-    point_filter_num: 4
+    imu_topic:  "/kitti/oxts/imu"
+    point_filter_num: 6
     sweep_cut_num: 1
     time_sync_en: false         # ONLY turn on when external time synchronization is really not possible
-    gravity_acc: [ 0.0, 0.0, 9.8]
+    gravity_acc: [ 0.0, 0.0, 9.80416]
     
 lidar_parameter:
     lidar_type: 2                # 1 for Livox serials LiDAR, 2 for Velodyne LiDAR, 3 for ouster LiDAR, 
-    N_SCANS: 32
+    N_SCANS: 64
     SCAN_RATE: 10                # only need to be set for velodyne, unit: Hz,
-    time_unit: 0            # the unit of time/t field in the PointCloud2 rostopic: 0-second, 1-milisecond, 2-microsecond, 3-nanosecond.
+    time_unit: 2            # the unit of time/t field in the PointCloud2 rostopic: 0-second, 1-milisecond, 2-microsecond, 3-nanosecond.
     blind: 2
     fov_degree:    360
     det_range:     100.0
@@ -24,9 +24,9 @@ imu_parameter:
 
 extrinsic_parameter:
     extrinsic_enable:  false      # true: enable the online estimation of IMU-LiDAR extrinsic,
-    extrinsic_t: [ 0.0, 0.0, 0.28]
-    extrinsic_R: [ 0, 1, 0, 
-                   -1, 0, 0, 
+    extrinsic_t: [ 0.112, 0.176, -0.247]
+    extrinsic_R: [ 1, 0, 0, 
+                   0, 1, 0, 
                    0, 0, 1]
 
 publish:
@@ -71,11 +71,11 @@ icp_options:
     beta_constant_velocity: 1.0 # Trajectory Regularisation Weight to constrain the optimization
     beta_small_velocity: 0.00
     solver: LIDAR # The type of SOLVER used in [LIO, LIDAR]
-    min_num_residuals: 800 # The minimum number of residuals for a valid ICP problem
-    max_num_residuals: 1000 # The maximum number of residuals considered (if more keypoints exist, residuals are randomly sampled)
+    min_num_residuals: 600 # The minimum number of residuals for a valid ICP problem
+    max_num_residuals: 800 # The maximum number of residuals considered (if more keypoints exist, residuals are randomly sampled)
 
     loss_function: HUBER # Options: [CAUCHY, STANDARD, HUBER, TOLERANT, TRUNCATED]
     ls_max_num_iters: 5 # The number of steps performed by ceres for each iteration of the ICP
     ls_num_threads: 16 # The number of threads to build and solve the least square system
-    ls_sigma: 0.5
+    ls_sigma: 1.0
     ls_tolerant_min_threshold: 0.05

@@ -23,7 +23,7 @@
       <param name="view_width" value="5.4769"/>
     </node>
     
-    <node name="playbag" pkg="rosbag" type="play" args="--clock /media/ywl/T7/dataset/utbm_robocar_dataset_20180716_noimage.bag -r 2" >
+    <node name="playbag" pkg="rosbag" type="play" args="--clock /media/ywl/T7/dataset/utbm/utbm_robocar_dataset_20180716_noimage.bag" >
     	<remap from="/velodyne_points_0" to="/velodyne_points" />
     </node>
 </launch>

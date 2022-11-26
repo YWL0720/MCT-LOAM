@@ -220,6 +220,7 @@ void cloudProcessing::velodyneHandler(const sensor_msgs::PointCloud2::ConstPtr &
         if(!given_offset_time)
 		{
 			int layer = raw_cloud.points[i].ring;
+//            std::cout << "ring = " << layer << " ";
             // 计算水平角度
 			double yaw_angle = atan2(point_temp.raw_point.y(), point_temp.raw_point.x()) * 57.2957;
 
@@ -279,6 +280,10 @@ void cloudProcessing::velodyneHandler(const sensor_msgs::PointCloud2::ConstPtr &
         // 最后一个点的相对时间除1 其实就是这帧点云的持续时间 在100ms左右
 		delta_cut_time = dt_last_point / sweep_cut_num;
 
+        int num_1 = 0;
+        int num_0 = 0;
+        int num_right = 0;
+
 		for(int i = 0; i < size; i++)
 		{
             // 降采样
@@ -288,9 +293,17 @@ void cloudProcessing::velodyneHandler(const sensor_msgs::PointCloud2::ConstPtr &
                 // alpha_time时间比例 [0,1]
 	        	point_temp.alpha_time = (point_temp.relative_time / dt_last_point);
 
-	        	if(point_temp.alpha_time > 1) point_temp.alpha_time = 1;
-	        	if(point_temp.alpha_time < 0) point_temp.alpha_time = 0;
-
+	        	if(point_temp.alpha_time > 1)
+                {
+                    point_temp.alpha_time = 1;
+                    num_1++;
+                }
+	        	if(point_temp.alpha_time < 0)
+                {
+                    point_temp.alpha_time = 0;
+                    num_0++;
+                }
+//                std::cout << point_temp.alpha_time << " ";
                 // id = [1, 2]
 	        	int id = int(point_temp.relative_time / delta_cut_time) + sweep_cut_num;
 
@@ -300,6 +313,9 @@ void cloudProcessing::velodyneHandler(const sensor_msgs::PointCloud2::ConstPtr &
 				v_cut_sweep[id].push_back(point_temp);
 			}
 	    }
+//        std::cout << "time = 1.0 points " << num_1 << std::endl;
+//        std::cout << "time = 0.0 points " << num_0 << std::endl;
+//        std::cout << "time right points " << size - num_1 - num_0 << std::endl;
 	}
 
     // 实际上v_dt_offset内只有一个元素就是dt_last_point 也就是这帧点云最后一个点的相对时间 即这帧点云的持续时间
